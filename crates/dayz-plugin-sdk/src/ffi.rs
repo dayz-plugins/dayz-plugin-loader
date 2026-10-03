@@ -50,8 +50,26 @@ impl<P: Plugin> Default for Slot<P> {
 /// `PluginInfo` holds raw string pointers, so it is not automatically `Sync`.
 struct StaticInfo(PluginInfo);
 
-// SAFETY: every `Str` inside points at a `&'static str` compiled into the plugin, which is
-// immutable and lives for the whole process, so it is safe to read from any thread.
+/// The dependency list in ABI form, leaked so the loader may read it at any time.
+///
+/// Leaking is the point: the ABI requires the array to outlive the describe call, and a
+/// plugin DLL is never unloaded while the game runs.
+fn dependencies<P: Plugin>() -> (*const api::Dependency, usize) {
+    if P::DEPENDENCIES.is_empty() {
+        return (core::ptr::null(), 0);
+    }
+    let list: &'static [api::Dependency] = Vec::leak(
+        P::DEPENDENCIES
+            .iter()
+            .map(|d| d.to_api())
+            .collect::<Vec<_>>(),
+    );
+    (list.as_ptr(), list.len())
+}
+
+// SAFETY: every `Str` inside points at a `&'static str` compiled into the plugin and the
+// dependency array is leaked, so everything reachable is immutable and lives for the whole
+// process; reading it from any thread is safe.
 unsafe impl Sync for StaticInfo {}
 // SAFETY: see the `Sync` impl; `OnceLock` additionally requires `Send` of its contents.
 unsafe impl Send for StaticInfo {}
@@ -61,12 +79,15 @@ static INFO: OnceLock<StaticInfo> = OnceLock::new();
 /// Body of the generated `dayz_plugin_describe`.
 pub fn describe<P: Plugin>() -> *const PluginInfo {
     let info = INFO.get_or_init(|| {
+        let (dependencies, dependency_count) = dependencies::<P>();
         StaticInfo(PluginInfo {
             struct_size: core::mem::size_of::<PluginInfo>(),
             api_version: API_VERSION,
             name: Str::new(P::NAME),
             version: Str::new(P::VERSION),
             description: Str::new(P::DESCRIPTION),
+            dependencies,
+            dependency_count,
         })
     });
     core::ptr::from_ref(&info.0)

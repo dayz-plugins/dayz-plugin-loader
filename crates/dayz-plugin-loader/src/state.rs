@@ -36,6 +36,8 @@ pub struct PluginRecord {
     pub subscriptions: BTreeSet<String>,
     /// Registered console commands by unqualified name.
     pub commands: BTreeMap<String, CommandInfo>,
+    /// Dependencies the plugin declared, one display line each.
+    pub dependencies: Vec<String>,
     /// Start returned success and no fault happened since.
     pub enabled: bool,
 }
@@ -134,6 +136,7 @@ impl State {
             settings: settings::Registry::default(),
             subscriptions: BTreeSet::new(),
             commands: BTreeMap::new(),
+            dependencies: Vec::new(),
             enabled: false,
         });
         Ok(PluginHandle(
@@ -349,6 +352,17 @@ impl State {
         }
         self.backbuffer_override = Some((width, height));
         Ok(())
+    }
+
+    /// Record the dependencies a plugin declared, for the console to show.
+    pub fn set_dependencies(
+        &mut self,
+        plugin: PluginHandle,
+        lines: impl IntoIterator<Item = String>,
+    ) {
+        if let Some(record) = self.plugin_mut(plugin) {
+            record.dependencies = lines.into_iter().collect();
+        }
     }
 
     /// Mark a plugin started or stopped/faulted.

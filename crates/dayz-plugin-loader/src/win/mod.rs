@@ -6,12 +6,14 @@
 
 mod console;
 mod data;
+mod deps;
 mod dispatch;
 mod exports;
 mod guard;
 mod hooks;
 mod hostapi;
 mod input;
+mod lifecycle;
 mod plugins;
 mod vtable;
 
@@ -194,6 +196,20 @@ pub(crate) fn run_console_line(caller: Option<PluginHandle>, line: &str) -> Stat
         console::print(&line);
     }
     dispatch::deliver(outcome.notify);
+    if let Some((op, name)) = outcome.lifecycle {
+        // Performed out here, with no lock held: it loads a DLL and calls into it.
+        let (status, lines) = lifecycle::perform(op, &name);
+        {
+            let mut guard = state();
+            for line in &lines {
+                guard.console_print(line.clone());
+            }
+        }
+        for line in &lines {
+            console::print(line);
+        }
+        return status;
+    }
     match outcome.command {
         Some((plugin, name, args)) => dispatch::command(plugin, &name, &args),
         None => outcome.status,

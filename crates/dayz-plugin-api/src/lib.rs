@@ -23,8 +23,8 @@ mod types;
 pub use callbacks::{PluginCallbacks, PresentInfo, SwapchainInfo};
 pub use host::{HostApi, ReplyFn};
 pub use types::{
-    ArgEntry, Bytes, CommandDesc, EnvEntry, HotkeyDesc, LogLevel, PluginHandle, PluginInfo,
-    SettingDesc, SettingFlags, SettingKind, Status, Str,
+    ArgEntry, Bytes, CommandDesc, Dependency, DependencyKind, EnvEntry, HotkeyDesc, LogLevel,
+    PluginHandle, PluginInfo, SettingDesc, SettingFlags, SettingKind, Status, Str,
 };
 
 /// Version of this ABI. The loader refuses plugins describing a different major version.

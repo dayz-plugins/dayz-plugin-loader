@@ -52,8 +52,17 @@ Things that look like style choices but are load-bearing:
 - **The state mutex is never held across a call into a plugin.** State methods return the
   notifications to deliver (`state::Notify`); the caller delivers them after unlocking. This
   is what lets a plugin change a setting from inside `on_present` without deadlocking.
-- **The plugin set is frozen once loading finishes.** Dispatch then needs no lock at all on
-  the render thread; disabling a faulted plugin flips an atomic.
+- **The plugin list is append only, published through an atomic pointer.** Dispatch needs no
+  lock at all on the render thread; disabling a faulted plugin flips an atomic, and `plugin
+  load` publishes a new vector and leaks the old one rather than mutating the one a render
+  thread may be walking. Nothing is ever removed: a `PluginHandle` is an index.
+- **Plugins are never unloaded.** `FreeLibrary` with hooks, threads and borrowed pointers live
+  is not something a stop export can make safe, so `plugin stop` calls the stop export and
+  silences the plugin while its DLL stays resident. Do not add a reload that pretends
+  otherwise.
+- **Loading is two passes:** describe every DLL, then let the declared dependencies decide who
+  starts and in what order (`dayz_plugin_core::deps` for the graph, `win/deps.rs` for the
+  libraries, files and symbols). A rejection is a log line, never an aborted launch.
 - **Hotkeys are polled from `Present` and gated on window focus.** `RegisterHotKey` was tried
   in the predecessor project: under this Wayland setup the registration succeeds and the key
   never fires, and a global grab is not wanted anyway.

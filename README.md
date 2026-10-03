@@ -10,7 +10,11 @@ The loader gives every plugin:
 - **Settings** that are typed, validated, persisted per plugin and changeable at runtime.
 - **Hotkeys** with a readable binding grammar, user overrides, and no global key grabs: a
   hotkey only fires while the game window has focus.
-- **A console** with built-in commands plus the commands and variables plugins register.
+- **A console** with built-in commands plus the commands and variables plugins register,
+  including the plugin lifecycle commands.
+- **Dependencies**, declared in the plugin and checked by the loader before it starts: other
+  plugins with version requirements, libraries such as `openxr_loader.dll`, files, and
+  `dayz-data` symbols. Dependencies also decide load order.
 - **Plugin-to-plugin messaging**: direct messages with synchronous replies, and broadcast
   topics with subscriptions.
 - **The process's command line and full environment**, parsed and ready to read.
@@ -106,6 +110,46 @@ impl Plugin for Hello {
 
 export_plugin!(Hello);
 ```
+
+### Dependencies
+
+A plugin declares what it needs as a `const`, and the loader checks it before `start` runs:
+
+```rust
+const DEPENDENCIES: &'static [Dependency] = &[
+    Dependency::plugin("dayz-vr", ">=0.2, <1"),   // also starts dayz-vr first
+    Dependency::library("openxr_loader.dll"),     // findable, not loaded by the loader
+    Dependency::file("dayz-plugins/data/hud.json"),
+    Dependency::symbol("render.prepare_view"),
+    Dependency::plugin("dayz-hud", "").optional(), // order only; missing is fine
+];
+```
+
+A plugin whose mandatory dependency is missing is not started and the reason is one log line.
+Plugin requirements are also a load order: dependencies start first, cycles are reported and
+everyone in them stays unloaded, and a plugin that needed something that did not start does
+not start either. One broken plugin never blocks a launch. Version requirements are comma
+separated comparators (`>=`, `>`, `=`, `<`, `<=`; a bare version means `>=`) over dot
+separated versions compared component by component, so `1.10` is newer than `1.9`.
+
+`host.require_symbols(...)` inside `start` still exists and does the same for addresses; a
+`Dependency::symbol` is the declarative form, checked before the plugin runs at all.
+
+### Lifecycle from the console
+
+| Command | Effect |
+| --- | --- |
+| `plugins`, `plugin list` | Loaded plugins, their version, file and whether they are running. |
+| `plugin deps [name]` | What each plugin declared it needs. |
+| `plugin load <name>` | Load, check and start a DLL from the plugin directory now. |
+| `plugin stop <name>` | Call the plugin's stop export and stop delivering callbacks. |
+| `plugin disable`/`enable <name>` | Pause and resume callback delivery without stopping. |
+
+There is deliberately no reload. Unloading the DLL would mean `FreeLibrary` while the hooks
+it installed, the threads it started and the pointers the loader and other plugins hold are
+all still live, and a plugin name can only be used once per launch because handles are
+indices that never move. Rebuild and restart the game; `plugin load` is for a DLL this session
+has not seen.
 
 Build it as a `cdylib` for `x86_64-pc-windows-msvc` and drop the DLL into
 `dayz-plugins/plugins/`. See `examples/hello-plugin` for the complete crate.

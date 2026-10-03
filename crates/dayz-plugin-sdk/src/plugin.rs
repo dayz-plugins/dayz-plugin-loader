@@ -1,5 +1,6 @@
 //! The trait a plugin implements.
 
+use crate::deps::Dependency;
 use crate::host::{Host, PluginError, PluginRef};
 
 /// The game's swapchain, as handed to [`Plugin::on_swapchain`].
@@ -40,6 +41,10 @@ pub trait Plugin: Sized + Send + Sync + 'static {
     const VERSION: &'static str;
     /// One-line description.
     const DESCRIPTION: &'static str;
+    /// What must be present before this plugin starts: other plugins, libraries, files or
+    /// `dayz-data` symbols. The loader checks the list and logs why it skipped the plugin,
+    /// rather than letting the plugin discover the problem at runtime.
+    const DEPENDENCIES: &'static [Dependency] = &[];
 
     /// Create the plugin. Register settings, hotkeys and commands here; registration is only
     /// allowed during this call.

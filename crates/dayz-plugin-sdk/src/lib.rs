@@ -27,6 +27,7 @@
 //! export_plugin!(Hello);
 //! ```
 
+mod deps;
 mod ffi;
 mod host;
 mod logger;
@@ -34,6 +35,7 @@ mod plugin;
 mod settings;
 
 pub use dayz_plugin_api as api;
+pub use deps::Dependency;
 pub use host::{Arg, CommandLine, Host, PluginError, PluginRef};
 pub use plugin::{Plugin, PresentInfo, SwapchainInfo};
 pub use settings::{Setting, SettingKind};

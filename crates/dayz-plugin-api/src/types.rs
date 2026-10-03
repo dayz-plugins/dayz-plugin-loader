@@ -104,6 +104,41 @@ pub enum LogLevel {
     Trace = 5,
 }
 
+/// What a [`Dependency`] names.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DependencyKind {
+    /// Another plugin, by its [`PluginInfo::name`]. Decides load order.
+    Plugin = 0,
+    /// A DLL that must be findable on the loader's search path, for example `openxr_loader.dll`.
+    Library = 1,
+    /// A file that must exist, relative to the game directory or absolute.
+    File = 2,
+    /// A `dayz-data` symbol or offset that must have resolved for this build.
+    Symbol = 3,
+}
+
+/// One requirement the loader checks before starting a plugin.
+///
+/// A plugin whose mandatory dependencies are not met is never started, and the reason is
+/// logged once instead of surfacing later as a crash inside the plugin.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct Dependency {
+    /// `size_of::<Dependency>()`.
+    pub struct_size: usize,
+    /// What `name` refers to.
+    pub kind: DependencyKind,
+    /// Plugin name, library file name, file path or symbol name.
+    pub name: Str,
+    /// Version requirement for [`DependencyKind::Plugin`], for example `>=1.2` or
+    /// `>=1.2, <2`. Empty accepts any version, and other kinds ignore it.
+    pub version: Str,
+    /// Non-zero to carry on without it; the dependency then only affects load order.
+    pub optional: u32,
+}
+
 /// Static description of a plugin, returned by the describe export.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -118,6 +153,10 @@ pub struct PluginInfo {
     pub version: Str,
     /// One-line description.
     pub description: Str,
+    /// Requirements, or null when `dependency_count` is 0. Must stay valid while loaded.
+    pub dependencies: *const Dependency,
+    /// Number of entries in `dependencies`.
+    pub dependency_count: usize,
 }
 
 /// Value type of a setting.

@@ -5,6 +5,60 @@
 
 use thiserror::Error;
 
+/// What `plugin <op>` asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginOp {
+    /// `plugin list`: loaded plugins with their state.
+    List,
+    /// `plugin deps [name]`: declared dependencies.
+    Deps,
+    /// `plugin load <name>`: load and start a DLL from the plugin directory.
+    Load,
+    /// `plugin stop <name>`: call the plugin's stop export and silence it.
+    Stop,
+    /// `plugin enable <name>`: resume callback delivery.
+    Enable,
+    /// `plugin disable <name>`: pause callback delivery without stopping the plugin.
+    Disable,
+    /// `plugin reload <name>`: not possible in-process; the loader explains why.
+    Reload,
+}
+
+impl PluginOp {
+    /// Whether the operation acts on one named plugin.
+    #[must_use]
+    pub fn needs_name(self) -> bool {
+        !matches!(self, PluginOp::List | PluginOp::Deps)
+    }
+
+    /// Canonical spelling of the operation.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PluginOp::List => "list",
+            PluginOp::Deps => "deps",
+            PluginOp::Load => "load",
+            PluginOp::Stop => "stop",
+            PluginOp::Enable => "enable",
+            PluginOp::Disable => "disable",
+            PluginOp::Reload => "reload",
+        }
+    }
+
+    fn parse(word: &str) -> Option<Self> {
+        Some(match word {
+            "list" | "ls" => PluginOp::List,
+            "deps" | "dependencies" => PluginOp::Deps,
+            "load" => PluginOp::Load,
+            "stop" | "unload" => PluginOp::Stop,
+            "enable" => PluginOp::Enable,
+            "disable" => PluginOp::Disable,
+            "reload" => PluginOp::Reload,
+            _ => return None,
+        })
+    }
+}
+
 /// A parsed console line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Line {
@@ -18,8 +72,8 @@ pub enum Line {
     Get(String),
     /// `set <plugin.key> <value>`.
     Set(String, String),
-    /// `plugins`: loaded plugins with state.
-    Plugins,
+    /// `plugins`, or `plugin <op> [name]`: the plugin lifecycle commands.
+    Plugin(PluginOp, Option<String>),
     /// `symbols [prefix]`: resolved game addresses and offsets.
     Symbols(Option<String>),
     /// `<plugin.key>` alone prints the value, `<plugin.key> <value>` sets it.
@@ -37,6 +91,12 @@ pub enum ParseError {
     /// `get`/`set` without a name.
     #[error("usage: {0} <plugin.key>")]
     NeedsName(&'static str),
+    /// `plugin` with no operation, or one that does not exist.
+    #[error("usage: plugin <list|deps|load|stop|enable|disable|reload> [name]")]
+    PluginUsage,
+    /// A `plugin` operation that acts on one plugin, without its name.
+    #[error("usage: plugin {0} <name>")]
+    PluginNeedsName(&'static str),
 }
 
 /// Split the first whitespace separated word from the rest.
@@ -63,7 +123,18 @@ pub fn parse(line: &str) -> Result<Line, ParseError> {
     Ok(match word.as_str() {
         "help" | "?" => Line::Help(optional(rest)),
         "list" | "ls" => Line::List(optional(rest)),
-        "plugins" => Line::Plugins,
+        "plugins" => Line::Plugin(PluginOp::List, None),
+        "plugin" => {
+            let (op, name) = split_word(rest);
+            let op = PluginOp::parse(&op.to_ascii_lowercase()).ok_or(ParseError::PluginUsage)?;
+            // Plugin names are lower case by rule, so normalising keeps `plugin stop VR`
+            // working the way the rest of the console does.
+            let name = optional(name);
+            if op.needs_name() && name.is_none() {
+                return Err(ParseError::PluginNeedsName(op.as_str()));
+            }
+            Line::Plugin(op, name)
+        }
         "symbols" | "syms" => Line::Symbols(optional(rest)),
         "get" => {
             if rest.is_empty() {
@@ -98,6 +169,22 @@ pub const BUILTIN_HELP: &[(&str, &str)] = &[
     ),
     ("plugins", "List loaded plugins and their state."),
     (
+        "plugin deps [name]",
+        "Show what plugins declared they need.",
+    ),
+    (
+        "plugin load <name>",
+        "Load and start a DLL from the plugin directory.",
+    ),
+    (
+        "plugin stop <name>",
+        "Stop a plugin; the DLL stays in the process.",
+    ),
+    (
+        "plugin enable|disable <name>",
+        "Resume or pause callback delivery.",
+    ),
+    (
         "symbols [prefix]",
         "List resolved game addresses and offsets.",
     ),
@@ -126,7 +213,7 @@ mod tests {
             Ok(Line::Help(Some("dayzvr.stereo.ipd".into())))
         );
         assert_eq!(parse("ls dayzvr"), Ok(Line::List(Some("dayzvr".into()))));
-        assert_eq!(parse("plugins"), Ok(Line::Plugins));
+        assert_eq!(parse("plugins"), Ok(Line::Plugin(PluginOp::List, None)));
         assert_eq!(parse("symbols"), Ok(Line::Symbols(None)));
         assert_eq!(
             parse("syms Render."),
@@ -139,6 +226,31 @@ mod tests {
         );
         assert_eq!(parse("set a.b"), Err(ParseError::SetNeedsValue));
         assert_eq!(parse("get"), Err(ParseError::NeedsName("get")));
+    }
+
+    #[test]
+    fn plugin_operations() {
+        assert_eq!(parse("plugin ls"), Ok(Line::Plugin(PluginOp::List, None)));
+        assert_eq!(
+            parse("plugin deps"),
+            Ok(Line::Plugin(PluginOp::Deps, None)),
+            "deps without a name shows every plugin"
+        );
+        assert_eq!(
+            parse("plugin load Hello"),
+            Ok(Line::Plugin(PluginOp::Load, Some("hello".into())))
+        );
+        assert_eq!(
+            parse("plugin unload hello"),
+            Ok(Line::Plugin(PluginOp::Stop, Some("hello".into()))),
+            "unload is a synonym for stop, which is what it really does"
+        );
+        assert_eq!(parse("plugin"), Err(ParseError::PluginUsage));
+        assert_eq!(parse("plugin frobnicate x"), Err(ParseError::PluginUsage));
+        assert_eq!(
+            parse("plugin stop"),
+            Err(ParseError::PluginNeedsName("stop"))
+        );
     }
 
     #[test]

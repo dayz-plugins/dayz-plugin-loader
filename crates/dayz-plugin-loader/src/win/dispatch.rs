@@ -26,7 +26,7 @@ fn to_plugin(plugin: &Active, what: &str, body: impl FnOnce()) {
 
 /// The game's swapchain was created or recreated.
 pub(crate) fn swapchain(info: &api::SwapchainInfo) {
-    for plugin in plugins::active() {
+    for &plugin in plugins::active() {
         let Some(cb) = plugin.callbacks.on_swapchain else {
             continue;
         };
@@ -38,7 +38,7 @@ pub(crate) fn swapchain(info: &api::SwapchainInfo) {
 
 /// One `Present` call, before it reaches DXGI.
 pub(crate) fn present(info: &api::PresentInfo) {
-    for plugin in plugins::active() {
+    for &plugin in plugins::active() {
         let Some(cb) = plugin.callbacks.on_present else {
             continue;
         };
@@ -50,7 +50,7 @@ pub(crate) fn present(info: &api::PresentInfo) {
 
 /// A successful `ResizeBuffers`.
 pub(crate) fn resize(width: u32, height: u32) {
-    for plugin in plugins::active() {
+    for &plugin in plugins::active() {
         let Some(cb) = plugin.callbacks.on_resize else {
             continue;
         };
@@ -65,7 +65,7 @@ pub(crate) fn hotkey(action: &str) {
     let Some((name, bare)) = action.split_once('.') else {
         return;
     };
-    let Some(plugin) = plugins::active().iter().find(|p| p.name == name) else {
+    let Some(plugin) = plugins::find_by_name(name) else {
         return;
     };
     let Some(cb) = plugin.callbacks.on_hotkey else {

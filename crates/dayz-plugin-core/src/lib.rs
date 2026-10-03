@@ -5,6 +5,7 @@
 
 pub mod cmdline;
 pub mod console;
+pub mod deps;
 pub mod hotkeys;
 pub mod keys;
 pub mod names;

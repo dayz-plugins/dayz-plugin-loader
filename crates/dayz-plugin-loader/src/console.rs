@@ -2,7 +2,7 @@
 //! Windows side must make after unlocking, so this stays testable without a game.
 
 use dayz_plugin_api::{PluginHandle, Status};
-use dayz_plugin_core::console::{self, Line, BUILTIN_HELP};
+use dayz_plugin_core::console::{self, Line, PluginOp, BUILTIN_HELP};
 use dayz_plugin_core::names;
 
 use crate::state::{Notify, State};
@@ -16,6 +16,11 @@ pub struct Outcome {
     pub notify: Vec<Notify>,
     /// Plugin command to run: `(plugin, name, args)`.
     pub command: Option<(PluginHandle, String, String)>,
+    /// Lifecycle operation for the platform layer to perform once the lock is released.
+    ///
+    /// Loading a DLL and calling into it must not happen under the state lock, so the same
+    /// rule as for [`Outcome::command`] applies: this module only decides what to do.
+    pub lifecycle: Option<(PluginOp, String)>,
 }
 
 impl Default for Outcome {
@@ -24,6 +29,7 @@ impl Default for Outcome {
             status: Status::Ok,
             notify: Vec::new(),
             command: None,
+            lifecycle: None,
         }
     }
 }
@@ -55,25 +61,7 @@ pub fn execute(state: &mut State, caller: Option<PluginHandle>, line: &str) -> O
         }
         Line::Help(Some(name)) => help_for(state, &name),
         Line::List(prefix) => list(state, prefix.as_deref()),
-        Line::Plugins => {
-            let lines: Vec<String> = state
-                .plugins
-                .iter()
-                .map(|p| {
-                    format!(
-                        "{} {} ({}) {}",
-                        p.name,
-                        p.version,
-                        p.file,
-                        if p.enabled { "running" } else { "disabled" }
-                    )
-                })
-                .collect();
-            for l in lines {
-                state.console_print(l);
-            }
-            Outcome::default()
-        }
+        Line::Plugin(op, name) => plugin_op(state, op, name.as_deref()),
         Line::Symbols(prefix) => {
             let mut lines = (state.symbol_lines)(prefix.as_deref());
             if lines.is_empty() {
@@ -89,6 +77,84 @@ pub fn execute(state: &mut State, caller: Option<PluginHandle>, line: &str) -> O
             set(state, caller, &name, &value)
         }
         Line::Command(name, args) => command(state, caller, &name, &args),
+    }
+}
+
+/// The plugin lifecycle commands.
+///
+/// Listing is answered here; everything that calls into a DLL is handed back to the platform
+/// layer, which performs it after the state lock is gone.
+fn plugin_op(state: &mut State, op: PluginOp, name: Option<&str>) -> Outcome {
+    match op {
+        PluginOp::List => {
+            let lines: Vec<String> = state
+                .plugins
+                .iter()
+                .map(|p| {
+                    format!(
+                        "{} {} ({}) {}",
+                        p.name,
+                        p.version,
+                        p.file,
+                        if p.enabled { "running" } else { "stopped" }
+                    )
+                })
+                .collect();
+            for l in lines {
+                state.console_print(l);
+            }
+            Outcome::default()
+        }
+        PluginOp::Deps => {
+            let lines: Vec<String> = state
+                .plugins
+                .iter()
+                .filter(|p| name.is_none_or(|n| p.name == n))
+                .flat_map(|p| {
+                    if p.dependencies.is_empty() {
+                        vec![format!("{} needs nothing", p.name)]
+                    } else {
+                        p.dependencies
+                            .iter()
+                            .map(|d| format!("{} needs {d}", p.name))
+                            .collect()
+                    }
+                })
+                .collect();
+            if lines.is_empty() {
+                return fail(
+                    state,
+                    Status::NotFound,
+                    format!("no plugin named {}", name.unwrap_or_default()),
+                );
+            }
+            for l in lines {
+                state.console_print(l);
+            }
+            Outcome::default()
+        }
+        PluginOp::Reload => fail(
+            state,
+            Status::Unsupported,
+            "reloading is not possible in-process: the DLL's hooks, threads and the pointers \
+             plugins hold would all have to come back identical. Rebuild and restart the game; \
+             `plugin stop` plus `plugin load` only works for a DLL under a new file name."
+                .to_owned(),
+        ),
+        // The name is guaranteed by the parser for these.
+        PluginOp::Load | PluginOp::Stop | PluginOp::Enable | PluginOp::Disable => {
+            let Some(name) = name else {
+                return fail(
+                    state,
+                    Status::InvalidArgument,
+                    format!("usage: plugin {} <name>", op.as_str()),
+                );
+            };
+            Outcome {
+                lifecycle: Some((op, name.to_owned())),
+                ..Outcome::default()
+            }
+        }
     }
 }
 
@@ -269,6 +335,46 @@ mod tests {
             execute(&mut s, None, "vr.recenter").status,
             Status::NotFound
         );
+    }
+
+    #[test]
+    fn plugin_lifecycle_lines_are_handed_to_the_platform_layer() {
+        let (mut s, h) = fixture();
+        s.set_dependencies(
+            h,
+            [
+                "library openxr_loader.dll".to_owned(),
+                "plugin a (optional)".to_owned(),
+            ],
+        );
+        execute(&mut s, None, "plugins");
+        assert_eq!(last(&s), "vr 1 (vr.dll) running");
+        execute(&mut s, None, "plugin deps");
+        assert_eq!(last(&s), "vr needs plugin a (optional)");
+        assert_eq!(
+            execute(&mut s, None, "plugin deps nope").status,
+            Status::NotFound
+        );
+
+        let out = execute(&mut s, None, "plugin load hello");
+        assert_eq!(out.lifecycle, Some((PluginOp::Load, "hello".to_owned())));
+        assert_eq!(
+            out.status,
+            Status::Ok,
+            "the platform layer reports the real one"
+        );
+        let out = execute(&mut s, None, "plugin disable vr");
+        assert_eq!(out.lifecycle, Some((PluginOp::Disable, "vr".to_owned())));
+
+        // Reload is refused in one place, with the reason, rather than silently doing less.
+        let out = execute(&mut s, None, "plugin reload vr");
+        assert_eq!(out.status, Status::Unsupported);
+        assert!(last(&s).contains("not possible in-process"));
+        assert_eq!(
+            execute(&mut s, None, "plugin stop").status,
+            Status::InvalidArgument
+        );
+        let _ = std::fs::remove_dir_all(&s.paths.game_dir);
     }
 
     #[test]
