@@ -20,6 +20,8 @@ pub enum Line {
     Set(String, String),
     /// `plugins`: loaded plugins with state.
     Plugins,
+    /// `symbols [prefix]`: resolved game addresses and offsets.
+    Symbols(Option<String>),
     /// `<plugin.key>` alone prints the value, `<plugin.key> <value>` sets it.
     Variable(String, Option<String>),
     /// `<plugin.command> [args...]`: forwarded to the owning plugin with raw args.
@@ -62,6 +64,7 @@ pub fn parse(line: &str) -> Result<Line, ParseError> {
         "help" | "?" => Line::Help(optional(rest)),
         "list" | "ls" => Line::List(optional(rest)),
         "plugins" => Line::Plugins,
+        "symbols" | "syms" => Line::Symbols(optional(rest)),
         "get" => {
             if rest.is_empty() {
                 return Err(ParseError::NeedsName("get"));
@@ -94,6 +97,10 @@ pub const BUILTIN_HELP: &[(&str, &str)] = &[
         "List settings and commands, optionally filtered.",
     ),
     ("plugins", "List loaded plugins and their state."),
+    (
+        "symbols [prefix]",
+        "List resolved game addresses and offsets.",
+    ),
     ("get <plugin.key>", "Print a setting."),
     ("set <plugin.key> <value>", "Change a setting."),
     ("<plugin.key> [value]", "Shorthand for get / set."),
@@ -120,6 +127,11 @@ mod tests {
         );
         assert_eq!(parse("ls dayzvr"), Ok(Line::List(Some("dayzvr".into()))));
         assert_eq!(parse("plugins"), Ok(Line::Plugins));
+        assert_eq!(parse("symbols"), Ok(Line::Symbols(None)));
+        assert_eq!(
+            parse("syms Render."),
+            Ok(Line::Symbols(Some("render.".into())))
+        );
         assert_eq!(parse("get A.B"), Ok(Line::Get("a.b".into())));
         assert_eq!(
             parse("set a.b Hello World"),

@@ -39,6 +39,8 @@ scripts/build.sh --deploy   # also install into $DAYZ_DIR
 | `dayz-plugin-core` | Platform independent logic. No Windows, so it tests on the host in seconds. |
 | `dayz-plugin-sdk` | Safe Rust API for plugin authors. |
 | `dayz-plugin-loader` | The `dxgi.dll`: exports, vtable hooks, plugin loading, host API. |
+| `dayz-data` | Address database reader and resolver. Platform independent, so it tests on the host. |
+| `dayz-data-tool` | The `dayz-data` command. Needs PE parsing, which is why it is separate from the reader. |
 
 Things that look like style choices but are load-bearing:
 
@@ -59,6 +61,14 @@ Things that look like style choices but are load-bearing:
   DLL can deadlock, so initialisation happens on the first DXGI call.
 - Settings are stored as text and validated against the plugin's descriptor on read, so a
   hand-edited config file can never desynchronise a type.
+- **Addresses are data, never constants.** They live in the
+  [dayz-data](https://github.com/dayz-plugins/dayz-data) repository and resolve by name at
+  startup. Never compile an address into a crate here, and never let a plugin do it: that is
+  the whole reason the database exists. Patterns are the source of truth and the per-build
+  file is a cache, so the common case after a game update is that scanning finds everything
+  and nobody has to do anything.
+- **A global never gets a byte check.** Its bytes on disk are initialisation data, not what
+  memory holds at runtime, so a check over one fails on every launch.
 
 ## Conventions
 

@@ -16,6 +16,9 @@ The loader gives every plugin:
 - **The process's command line and full environment**, parsed and ready to read.
 - **Frame hooks**: swapchain creation, every `Present`, every `ResizeBuffers`, and a way to
   ask for a different backbuffer size before the swapchain exists.
+- **Game addresses by name**, resolved from the
+  [dayz-data](https://github.com/dayz-plugins/dayz-data) database, so no plugin carries an
+  address of its own and a game update is a data change rather than a release of everything.
 - **Isolation**: every call into a plugin is wrapped against panics and hardware faults. A
   plugin that faults is logged and disabled; the other plugins and the game keep running.
 
@@ -27,6 +30,8 @@ The loader gives every plugin:
 | `crates/dayz-plugin-sdk` | Safe Rust API for writing plugins. Implement a trait, call one macro. |
 | `crates/dayz-plugin-core` | Platform independent logic: key grammar, settings, console parsing, config files. Builds and tests on any host. |
 | `crates/dayz-plugin-loader` | The `dxgi.dll` itself: exports, vtable hooks, plugin loading, host API. |
+| `crates/dayz-data` | Reader and resolver for the address database: patterns, per-build caches, byte checks. |
+| `tools/dayz-data-tool` | The `dayz-data` command: inspect an executable, validate a database, generate build files. |
 | `examples/hello-plugin` | Smallest useful plugin, and the SDK's smoke test. |
 
 ## Building
@@ -70,6 +75,8 @@ DayZ/
     ├── config/loader.toml          loader settings
     ├── config/hotkeys.toml         hotkey overrides
     ├── config/<plugin>.toml        one file per plugin, written by the loader
+    ├── data/patterns.json          the dayz-data database
+    ├── data/builds/*.json          one file per known game build
     └── logs/loader.log             current run; the previous one is loader.prev.log
 ```
 
@@ -105,6 +112,29 @@ Build it as a `cdylib` for `x86_64-pc-windows-msvc` and drop the DLL into
 
 A plugin in another language only needs the three exports and the structs from
 `crates/dayz-plugin-api`; nothing in the ABI is Rust specific.
+
+## Game addresses
+
+A plugin asks for an address by name and never contains one:
+
+```rust
+host.require_symbols(["render.frame", "camera.manager"])?;   // in start, or stay unloaded
+let frame = host.symbol("render.frame")?;
+let rotation = host.offset("framebase.rotation")?;
+```
+
+The names resolve from [dayz-data](https://github.com/dayz-plugins/dayz-data), which the
+loader reads at startup: the cache for a known executable, byte-pattern scanning for an
+unknown one, with every cached address verified against the bytes it expects. The in-game
+console's `symbols` command lists what resolved and what did not, and the log carries the
+same per symbol. `require_symbols` is what makes a game update a named missing symbol in the
+log instead of a crash.
+
+The `dayz-data` command inspects and maintains the database:
+
+```bash
+cargo run -p dayz-data-tool -- validate ../dayz-data --exe "$DAYZ_DIR/DayZ_x64.exe"
+```
 
 ## Documentation
 

@@ -15,6 +15,7 @@ repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 container="${BUILD_BOX:-build-box}"
 target="x86_64-pc-windows-msvc"
 dayz_dir="${DAYZ_DIR:-/run/media/system/Data/Games/Steam/steamapps/common/DayZ}"
+data_repo="${DAYZ_DATA_DIR:-$repo_root/../dayz-data}"
 
 deploy=0
 fast=0
@@ -79,7 +80,8 @@ fi
 
 plugins_dir="$dayz_dir/dayz-plugins/plugins"
 config_dir="$dayz_dir/dayz-plugins/config"
-mkdir -p "$plugins_dir" "$config_dir" "$dayz_dir/dayz-plugins/logs"
+data_dir="$dayz_dir/dayz-plugins/data"
+mkdir -p "$plugins_dir" "$config_dir" "$data_dir" "$dayz_dir/dayz-plugins/logs"
 cp -f "$out/dxgi.dll" "$dayz_dir/dxgi.dll"
 cp -f "$out/hello.dll" "$plugins_dir/hello.dll"
 # Config files carry the user's own values; never overwrite one that already exists.
@@ -90,6 +92,16 @@ for sample in "$repo_root"/config/*.toml; do
         echo "installed default $name"
     fi
 done
+# The address database is a separate repository; copy it when it sits next to this one.
+if [[ -d "$data_repo" ]]; then
+    mkdir -p "$data_dir/builds"
+    cp -f "$data_repo/patterns.json" "$data_dir/patterns.json" 2> /dev/null || true
+    cp -f "$data_repo"/builds/*.json "$data_dir/builds/" 2> /dev/null || true
+    echo "installed the dayz-data database from $data_repo"
+else
+    echo "no dayz-data checkout at $data_repo; plugins will get no symbols" >&2
+fi
+
 echo "deployed to $dayz_dir"
 echo
 echo "run the game with WINEDLLOVERRIDES=\"dxgi=n,b\" and --console for a log window"
