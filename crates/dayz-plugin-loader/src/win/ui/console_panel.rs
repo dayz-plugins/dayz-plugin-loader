@@ -67,10 +67,12 @@ impl ConsolePanel {
                     if response.has_focus() {
                         self.recall_history(ui.ctx());
                     }
-                    if response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                    // Checked against the box having focus rather than losing it: egui only
+                    // reports `lost_focus` when it processes the Enter itself, which it does
+                    // not on the frame focus was just requested back, and a console that
+                    // silently eats every other command is worse than useless.
+                    if response.has_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
                         submitted = self.submit();
-                        // Enter in egui takes focus away; the console is a place where the
-                        // next command follows the last one, so it is taken straight back.
                         self.focus = true;
                     }
                 });
