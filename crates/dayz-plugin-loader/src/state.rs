@@ -91,6 +91,11 @@ pub struct State {
     pub pending: Vec<(String, String)>,
     /// Recent console output.
     pub console: VecDeque<String>,
+    /// How many lines the console has ever printed.
+    ///
+    /// The buffer above is bounded, so a position in it says nothing once it is full. This
+    /// counter is what [`State::console_mark`] hands out and never goes backwards.
+    pub console_printed: u64,
     /// Produces the lines the `symbols` command prints.
     ///
     /// A function pointer, because the symbol table belongs to the platform layer and this
@@ -129,6 +134,7 @@ impl State {
             backbuffer_override: None,
             pending: Vec::new(),
             console: VecDeque::new(),
+            console_printed: 0,
             symbol_lines: no_symbols,
             hook_lines: no_hooks,
         }
@@ -405,6 +411,27 @@ impl State {
             self.console.pop_front();
         }
         self.console.push_back(line);
+        self.console_printed += 1;
+    }
+
+    /// Remember where the console is, for [`State::console_since`].
+    pub fn console_mark(&self) -> u64 {
+        self.console_printed
+    }
+
+    /// Every line printed since `mark`, oldest first.
+    ///
+    /// Lines that the bounded buffer has already dropped cannot be returned, so a command
+    /// that printed more than the whole history is reported from where the history starts.
+    pub fn console_since(&self, mark: u64) -> Vec<String> {
+        let produced = usize::try_from(self.console_printed.saturating_sub(mark))
+            .unwrap_or(usize::MAX)
+            .min(self.console.len());
+        self.console
+            .iter()
+            .skip(self.console.len() - produced)
+            .cloned()
+            .collect()
     }
 }
 
@@ -546,6 +573,35 @@ pub(crate) mod tests {
         }
         assert_eq!(s.subscribers(a, "pose"), vec![b]);
         assert!(s.subscribers(a, "other").is_empty());
+    }
+
+    #[test]
+    fn captured_output_survives_a_full_history() {
+        let mut s = state();
+        // Fill the buffer first: a position in it is then meaningless, which is the bug this
+        // guards against — capture used to skip by index and returned nothing.
+        for i in 0..(CONSOLE_HISTORY + 5) {
+            s.console_print(format!("old {i}"));
+        }
+        let mark = s.console_mark();
+        s.console_print("new 1".to_owned());
+        s.console_print("new 2".to_owned());
+        assert_eq!(
+            s.console_since(mark),
+            vec!["new 1".to_owned(), "new 2".to_owned()]
+        );
+    }
+
+    #[test]
+    fn capture_cannot_return_evicted_lines() {
+        let mut s = state();
+        let mark = s.console_mark();
+        for i in 0..(CONSOLE_HISTORY + 5) {
+            s.console_print(i.to_string());
+        }
+        let captured = s.console_since(mark);
+        assert_eq!(captured.len(), CONSOLE_HISTORY);
+        assert_eq!(captured.first().map(String::as_str), Some("5"));
     }
 
     #[test]

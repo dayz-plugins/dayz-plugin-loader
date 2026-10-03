@@ -8,8 +8,8 @@
 use core::ffi::c_void;
 
 use dayz_plugin_api::{
-    ArgEntry, Bytes, CommandDesc, EnvEntry, HostApi, HotkeyDesc, LogLevel, PluginHandle, ReplyFn,
-    SettingDesc, SettingFlags, SettingKind, Status, Str, API_VERSION,
+    ArgEntry, Bytes, CommandDesc, EnvEntry, HostApi, HotkeyDesc, LineFn, LogLevel, PluginHandle,
+    ReplyFn, SettingDesc, SettingFlags, SettingKind, Status, Str, API_VERSION,
 };
 use dayz_plugin_core::settings;
 
@@ -105,6 +105,7 @@ pub(crate) fn build(game_dir: &str, config_dir: &str, process: &Process) -> &'st
         hook_vtable,
         hook_detour,
         hook_remove,
+        console_capture,
     }))
 }
 
@@ -489,4 +490,22 @@ unsafe extern "C" fn hook_detour(
 
 unsafe extern "C" fn hook_remove(_host: *mut c_void, plugin: PluginHandle, id: u64) -> Status {
     plugin_hooks::remove(plugin, id)
+}
+
+unsafe extern "C" fn console_capture(
+    _host: *mut c_void,
+    plugin: PluginHandle,
+    line: Str,
+    sink: Option<LineFn>,
+    line_ctx: *mut c_void,
+) -> Status {
+    let (status, printed) = super::run_console_line_capture(Some(plugin), &text(line));
+    if let Some(sink) = sink {
+        for line in &printed {
+            // SAFETY: the ABI requires `sink` to accept a borrowed line for the duration of
+            // the call, which is exactly how long `line` lives here.
+            unsafe { sink(line_ctx, Str::new(line)) };
+        }
+    }
+    status
 }

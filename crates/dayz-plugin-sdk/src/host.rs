@@ -327,6 +327,28 @@ impl Host {
         check(unsafe { (self.api.console_exec)(self.api.host, self.handle, Str::new(line)) })
     }
 
+    /// Execute a console line and collect everything it printed.
+    ///
+    /// What a plugin needs when it is answering for the console rather than driving it: a
+    /// remote console, an overlay, a test. The status is returned alongside the output
+    /// instead of as an error, because a failed command's message is in those lines.
+    pub fn console_capture(&self, line: &str) -> (Status, Vec<String>) {
+        let mut lines: Vec<String> = Vec::new();
+        let ctx = core::ptr::from_mut(&mut lines).cast::<c_void>();
+        // SAFETY: `line` outlives the call, and `ctx` points at `lines`, which outlives it
+        // too; `collect_line` only ever receives this pointer.
+        let status = unsafe {
+            (self.api.console_capture)(
+                self.api.host,
+                self.handle,
+                Str::new(line),
+                Some(collect_line),
+                ctx,
+            )
+        };
+        (status, lines)
+    }
+
     /// Find another started plugin by name.
     #[must_use]
     pub fn find_plugin(&self, name: &str) -> Option<PluginRef> {
@@ -574,6 +596,20 @@ impl Host {
         // SAFETY: valid table pointer.
         check(unsafe { (self.api.hook_remove)(self.api.host, self.handle, hook.0) })
     }
+}
+
+/// Sink for [`Host::console_capture`]: pushes each line into the caller's vector.
+///
+/// # Safety
+/// `ctx` must be the `Vec<String>` pointer `console_capture` passed, and `line` must be
+/// readable for the duration of the call, which the ABI requires.
+unsafe extern "C" fn collect_line(ctx: *mut c_void, line: Str) {
+    if ctx.is_null() {
+        return;
+    }
+    // SAFETY: the only caller is the loader, with the pointer we handed it.
+    let lines = unsafe { &mut *ctx.cast::<Vec<String>>() };
+    lines.push(str_from(line));
 }
 
 /// A hook the loader installed for this plugin, and the handle to remove it early.

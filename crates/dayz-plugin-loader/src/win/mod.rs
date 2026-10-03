@@ -183,23 +183,30 @@ pub(crate) fn tick(_swapchain: *mut c_void) {
     }
 }
 
-/// Execute a console line and deliver whatever it produced.
+/// Execute a console line and deliver whatever it produced, discarding the output.
 pub(crate) fn run_console_line(caller: Option<PluginHandle>, line: &str) -> Status {
+    run_console_line_capture(caller, line).0
+}
+
+/// Execute a console line and return both the status and everything it printed.
+pub(crate) fn run_console_line_capture(
+    caller: Option<PluginHandle>,
+    line: &str,
+) -> (Status, Vec<String>) {
     let (outcome, printed) = {
         let mut guard = state();
-        let before = guard.console.len();
+        let before = guard.console_mark();
         let outcome = console_commands::execute(&mut guard, caller, line);
-        let printed: Vec<String> = guard
-            .console
-            .iter()
-            .skip(before.min(guard.console.len()))
-            .cloned()
-            .collect();
+        let printed = guard.console_since(before);
         (outcome, printed)
     };
-    for line in printed {
-        console::print(&line);
+    for line in &printed {
+        console::print(line);
     }
+    // The console echoes the typed line so the window and the log show what was asked. A
+    // caller capturing output already knows its own line, so it is not part of the answer.
+    let echo = format!("> {}", line.trim());
+    let printed: Vec<String> = printed.into_iter().filter(|l| *l != echo).collect();
     dispatch::deliver(outcome.notify);
     if let Some((op, name)) = outcome.lifecycle {
         // Performed out here, with no lock held: it loads a DLL and calls into it.
@@ -213,11 +220,18 @@ pub(crate) fn run_console_line(caller: Option<PluginHandle>, line: &str) -> Stat
         for line in &lines {
             console::print(line);
         }
-        return status;
+        return (status, [printed, lines].concat());
     }
     match outcome.command {
-        Some((plugin, name, args)) => dispatch::command(plugin, &name, &args),
-        None => outcome.status,
+        // A plugin command prints through `console_print`, which the lines above already
+        // captured for everything before this point; its own output lands in the buffer.
+        Some((plugin, name, args)) => {
+            let before = state().console_mark();
+            let status = dispatch::command(plugin, &name, &args);
+            let after = state().console_since(before);
+            (status, [printed, after].concat())
+        }
+        None => (outcome.status, printed),
     }
 }
 

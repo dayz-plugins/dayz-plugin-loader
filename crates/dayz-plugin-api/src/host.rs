@@ -10,6 +10,9 @@ use crate::types::{
 /// Callback a message receiver uses to answer synchronously.
 pub type ReplyFn = unsafe extern "C" fn(reply_ctx: *mut c_void, payload: Bytes);
 
+/// Callback receiving one line of console output, in the order it was printed.
+pub type LineFn = unsafe extern "C" fn(line_ctx: *mut c_void, line: Str);
+
 /// Services the loader offers. Every function takes `host` as its first argument.
 ///
 /// All functions are thread safe. Registration functions return [`Status::WrongPhase`]
@@ -202,4 +205,18 @@ pub struct HostApi {
     /// Returns [`Status::NotFound`] for an unknown id or one belonging to another plugin.
     pub hook_remove:
         unsafe extern "C" fn(host: *mut c_void, plugin: PluginHandle, id: u64) -> Status,
+
+    /// Run a console line and receive what it printed, line by line, before returning.
+    ///
+    /// [`HostApi::console_exec`] runs a line but its output only reaches the console window
+    /// and the log, which is no use to a plugin that is answering someone else's question —
+    /// a remote console, an overlay, a test. `sink` is called once per line while the call
+    /// is on the stack and must not be kept.
+    pub console_capture: unsafe extern "C" fn(
+        host: *mut c_void,
+        plugin: PluginHandle,
+        line: Str,
+        sink: Option<LineFn>,
+        line_ctx: *mut c_void,
+    ) -> Status,
 }
