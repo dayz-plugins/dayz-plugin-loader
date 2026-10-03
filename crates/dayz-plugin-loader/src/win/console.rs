@@ -6,6 +6,7 @@
 #![allow(unsafe_code)]
 
 use std::io::Write;
+use std::sync::Mutex;
 use std::sync::OnceLock;
 
 use windows::core::{w, PCWSTR};
@@ -93,14 +94,46 @@ fn bind_streams() {
     }
 }
 
+/// The one lock every console write goes through.
+///
+/// Wine's console device does not write a line atomically, so two threads writing at once
+/// interleave mid-line and the window fills with spliced text. Every writer the loader owns
+/// — the log, plugin output, command results — goes through here, as one `write_all` of one
+/// buffer under one lock. The game's own writes to the same handle are outside our reach,
+/// but there are few of them.
+static WRITING: Mutex<()> = Mutex::new(());
+
 /// Write one line to the console window, if there is one.
 pub(crate) fn print(line: &str) {
     if !is_active() {
         return;
     }
+    let mut buffer = String::with_capacity(line.len() + 1);
+    buffer.push_str(line);
+    buffer.push('\n');
+    let _guard = WRITING
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut out = std::io::stdout();
-    let _ = writeln!(out, "{line}");
+    let _ = out.write_all(buffer.as_bytes());
     let _ = out.flush();
+}
+
+/// `HH:MM:SS` of the local clock, for prefixing a console line.
+///
+/// The log file carries full timestamps; the window only needs enough to see how long ago
+/// something happened, and a date on every line would eat the width.
+pub(crate) fn clock() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let seconds = now % 86400;
+    format!(
+        "{:02}:{:02}:{:02}",
+        seconds / 3600,
+        (seconds % 3600) / 60,
+        seconds % 60
+    )
 }
 
 /// Start the thread that reads typed lines and executes them.

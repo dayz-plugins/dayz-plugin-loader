@@ -45,6 +45,13 @@ pub struct Registry {
 pub trait KeyState {
     /// Whether virtual key `vk` is currently held.
     fn is_down(&self, vk: u16) -> bool;
+
+    /// The virtual key the current layout puts at scan code `scancode`, if the platform can
+    /// say. The default answers "cannot", which makes a `sc..` binding simply never fire on
+    /// a platform that does not implement it, rather than firing on the wrong key.
+    fn vk_for_scancode(&self, _scancode: u16) -> Option<u16> {
+        None
+    }
     /// Which modifiers are currently held.
     fn modifiers(&self) -> Modifiers;
 }
@@ -107,7 +114,13 @@ impl Registry {
         let mut fired = Vec::new();
         for entry in &mut self.entries {
             let Some(chord) = entry.chord else { continue };
-            let now = state.is_down(chord.vk);
+            // A scan code binding is resolved every poll rather than once at registration:
+            // the user may switch keyboard layout while the game runs.
+            let vk = match chord.scancode {
+                Some(scancode) => state.vk_for_scancode(scancode),
+                None => Some(chord.vk),
+            };
+            let now = vk.is_some_and(|vk| state.is_down(vk));
             if now && !entry.down && chord.modifiers == held {
                 fired.push(entry.name.clone());
             }

@@ -288,7 +288,9 @@ unsafe extern "C" fn console_print(_host: *mut c_void, plugin: PluginHandle, lin
     let name = guard
         .plugin(plugin)
         .map_or_else(|| "?".to_owned(), |p| p.name.clone());
-    let line = format!("[{name}] {}", text(line));
+    // Same shape as a log line, because a plugin printing to the console is the same kind of
+    // event as a plugin logging, and interleaved output is unreadable without a clock.
+    let line = format!("{} [INFO ] [{name}] {}", console::clock(), text(line));
     console::print(&line);
     guard.console_print(line);
 }

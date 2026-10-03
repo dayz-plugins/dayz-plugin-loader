@@ -344,6 +344,7 @@ fn apply(closed: &[(dayz_plugin_api::PluginHandle, String)]) {
     {
         let mut guard = state();
         for (handle, panel) in closed {
+            log::debug!("panel {panel} closed from its window");
             guard.set_panel_open(*handle, panel, false);
         }
     }

@@ -1,7 +1,13 @@
-//! Key binding grammar: `f12`, `ctrl+shift+r`, `numpad5`, `caret`, `0x7b`, `none`.
+//! Key binding grammar: `f12`, `ctrl+shift+r`, `numpad5`, `caret`, `0x7b`, `sc29`, `none`.
 //!
 //! Virtual key codes follow the Win32 `VK_*` numbering so the loader can use them directly;
 //! the table itself has no Windows dependency.
+//!
+//! A name or a `0x..` code names a key *as the layout labels it*, which is what a user means
+//! by "bind it to Q". `sc<hex>` names a key by **where it is**: the scan code the keyboard
+//! sends, which is the same on every layout. `sc29` is the key under Escape — grave on a US
+//! layout, `^` on a German one, `²` on a French one — and is the only sane way to bind that
+//! key, because its virtual key code is a different one in each of those layouts.
 
 use std::fmt;
 
@@ -21,8 +27,14 @@ pub struct Modifiers {
 /// A parsed binding: one virtual key plus modifiers. `None` means unbound.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Chord {
-    /// Win32 virtual key code of the main key.
+    /// Win32 virtual key code of the main key. Ignored while [`Chord::scancode`] is set,
+    /// because the scan code only becomes a virtual key under a particular layout.
     pub vk: u16,
+    /// Physical key position, when the binding was written as `sc<hex>`.
+    ///
+    /// Resolved to a virtual key by the platform at poll time, so the same binding follows
+    /// the key's position rather than the character printed on it.
+    pub scancode: Option<u16>,
     /// Modifiers that must be held.
     pub modifiers: Modifiers,
 }
@@ -39,6 +51,9 @@ pub enum KeyError {
     /// The `0x..` form did not parse or exceeds the virtual key range.
     #[error("bad virtual key code {0:?}")]
     BadCode(String),
+    /// The `sc..` form did not parse as a scan code.
+    #[error("bad scan code {0:?}")]
+    BadScanCode(String),
 }
 
 const VK_BACK: u16 = 0x08;
@@ -173,6 +188,17 @@ pub fn parse(binding: &str) -> Result<Option<Chord>, KeyError> {
     let Some(name) = key else {
         return Err(KeyError::MissingKey(binding.to_owned()));
     };
+    if let Some(code) = name.strip_prefix("sc") {
+        let scancode = u16::from_str_radix(code.strip_prefix("0x").unwrap_or(code), 16)
+            .ok()
+            .filter(|sc| (1..=0x1FF).contains(sc))
+            .ok_or_else(|| KeyError::BadScanCode(name.to_owned()))?;
+        return Ok(Some(Chord {
+            vk: 0,
+            scancode: Some(scancode),
+            modifiers,
+        }));
+    }
     let vk = if let Some(hex) = name.strip_prefix("0x") {
         u16::from_str_radix(hex, 16)
             .ok()
@@ -181,7 +207,11 @@ pub fn parse(binding: &str) -> Result<Option<Chord>, KeyError> {
     } else {
         lookup(name).ok_or_else(|| KeyError::UnknownKey(name.to_owned()))?
     };
-    Ok(Some(Chord { vk, modifiers }))
+    Ok(Some(Chord {
+        vk,
+        scancode: None,
+        modifiers,
+    }))
 }
 
 impl fmt::Display for Chord {
@@ -194,6 +224,9 @@ impl fmt::Display for Chord {
         }
         if self.modifiers.shift {
             f.write_str("shift+")?;
+        }
+        if let Some(scancode) = self.scancode {
+            return write!(f, "sc{scancode:x}");
         }
         match self.vk {
             vk if (VK_F1..VK_F1 + 24).contains(&vk) => write!(f, "f{}", vk - VK_F1 + 1),
@@ -224,6 +257,7 @@ mod tests {
         assert_eq!(
             parse("F12"),
             Ok(Some(Chord {
+                scancode: None,
                 vk: 0x7B,
                 modifiers: Modifiers::default()
             }))
@@ -231,6 +265,7 @@ mod tests {
         assert_eq!(
             parse("a"),
             Ok(Some(Chord {
+                scancode: None,
                 vk: 0x41,
                 modifiers: Modifiers::default()
             }))
@@ -238,6 +273,7 @@ mod tests {
         assert_eq!(
             parse("7"),
             Ok(Some(Chord {
+                scancode: None,
                 vk: 0x37,
                 modifiers: Modifiers::default()
             }))
@@ -245,6 +281,7 @@ mod tests {
         assert_eq!(
             parse("numpad5"),
             Ok(Some(Chord {
+                scancode: None,
                 vk: 0x65,
                 modifiers: Modifiers::default()
             }))
@@ -254,6 +291,7 @@ mod tests {
     #[test]
     fn parses_modifiers_in_any_order() {
         let chord = Chord {
+            scancode: None,
             vk: 0x52,
             modifiers: Modifiers {
                 ctrl: true,
@@ -263,6 +301,26 @@ mod tests {
         };
         assert_eq!(parse("ctrl+shift+r"), Ok(Some(chord)));
         assert_eq!(parse("Shift + Control + R"), Ok(Some(chord)));
+    }
+
+    #[test]
+    fn a_scan_code_binding_names_a_position_not_a_character() {
+        let chord = parse("sc29").unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            chord,
+            Some(Chord {
+                vk: 0,
+                scancode: Some(0x29),
+                modifiers: Modifiers::default(),
+            })
+        );
+        // It round-trips through the config file.
+        assert_eq!(chord.map(|c| c.to_string()), Some("sc29".to_owned()));
+        // With modifiers, and with an explicit 0x.
+        let chord = parse("ctrl+sc0x3b").unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(chord.and_then(|c| c.scancode), Some(0x3b));
+        assert!(chord.is_some_and(|c| c.modifiers.ctrl));
+        assert!(matches!(parse("sczz"), Err(KeyError::BadScanCode(_))));
     }
 
     #[test]

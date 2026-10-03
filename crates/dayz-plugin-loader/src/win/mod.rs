@@ -95,7 +95,9 @@ fn init() -> bool {
     if let Some(level) = process.command_line.value(flags::LOG_LEVEL) {
         level.clone_into(&mut config.log_level);
     }
-    if let Err(e) = logging::init(&paths.logs_dir, config.level(), console::is_active()) {
+    let console_sink: Option<logging::ConsoleSink> =
+        console::is_active().then_some((console::print, console::clock));
+    if let Err(e) = logging::init(&paths.logs_dir, config.level(), console_sink) {
         console::print(&format!("could not open the log file: {e}"));
     }
     log::info!(
@@ -143,14 +145,24 @@ fn init() -> bool {
     guard.phase = Phase::Running;
     guard.symbol_lines = data::console_lines;
     guard.hook_lines = plugin_hooks::console_lines;
-    // The loader's own overlay actions. `caret` is the key under Escape on a German
-    // keyboard; `hotkeys.toml` renames it for everyone else.
-    guard.register_loader_hotkey("console", "Show the in-game console", "caret");
+    // The loader's own overlay actions. Bound by scan code, not by key name: 0x29 is the key
+    // under Escape on every layout, and its virtual key code is a different one on each — the
+    // reason binding it by name worked on one keyboard and not on the next.
+    guard.register_loader_hotkey("console", "Show the in-game console", "sc29");
     for entry in guard.hotkeys.iter() {
         let binding = entry
             .chord
             .map_or_else(|| "none".to_owned(), |c| c.to_string());
-        log::info!("hotkey {} = {binding}", entry.name);
+        // A scan code binding also reports what this keyboard layout makes of it, because
+        // "the key under Escape does nothing" is otherwise impossible to diagnose from a log.
+        let resolved = entry
+            .chord
+            .and_then(|c| c.scancode)
+            .and_then(|sc| {
+                dayz_plugin_core::hotkeys::KeyState::vk_for_scancode(&input::AsyncKeys, sc)
+            })
+            .map_or_else(String::new, |vk| format!(" (this layout: vk 0x{vk:02x})"));
+        log::info!("hotkey {} = {binding}{resolved}", entry.name);
     }
     let running = guard.plugins.iter().filter(|p| p.enabled).count();
     log::info!("{running} of {} plugins running", guard.plugins.len());

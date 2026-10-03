@@ -260,7 +260,8 @@ pub struct HostApi {
     ///
     /// The answer arrives later, in `on_dialog`, because the player answers in their own
     /// time and nothing in the loader may block a frame waiting for them. A plugin that
-    /// stops with a dialog still open has it closed for it, with [`UiAnswer::Closed`].
+    /// stops with a dialog still open has it closed for it, with
+    /// [`UiAnswer::Closed`](crate::UiAnswer::Closed).
     pub dialog_open: unsafe extern "C" fn(
         host: *mut c_void,
         plugin: PluginHandle,
@@ -270,7 +271,7 @@ pub struct HostApi {
 
     /// Take down one of this plugin's own dialogs, toasts or notices early.
     ///
-    /// A dialog closed this way answers with [`UiAnswer::Closed`].
+    /// A dialog closed this way answers with [`UiAnswer::Closed`](crate::UiAnswer::Closed).
     pub ui_close: unsafe extern "C" fn(host: *mut c_void, plugin: PluginHandle, id: u64) -> Status,
 
     /// Run a console line and receive what it printed, line by line, before returning.

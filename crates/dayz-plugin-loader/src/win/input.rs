@@ -9,7 +9,7 @@ use dayz_plugin_core::hotkeys::KeyState;
 use dayz_plugin_core::keys::Modifiers;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, VK_CONTROL, VK_MENU, VK_SHIFT,
+    GetAsyncKeyState, MapVirtualKeyW, MAPVK_VSC_TO_VK_EX, VK_CONTROL, VK_MENU, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
@@ -27,6 +27,16 @@ fn down(vk: u16) -> bool {
 impl KeyState for AsyncKeys {
     fn is_down(&self, vk: u16) -> bool {
         down(vk)
+    }
+
+    fn vk_for_scancode(&self, scancode: u16) -> Option<u16> {
+        // MAPVK_VSC_TO_VK_EX asks the *current* layout where that physical key is, which is
+        // the whole point: scan code 0x29 is VK_OEM_3 on a US layout and VK_OEM_5 on a German
+        // one, and the user should not have to know which they have.
+        //
+        // SAFETY: MapVirtualKeyW has no preconditions.
+        let vk = unsafe { MapVirtualKeyW(u32::from(scancode), MAPVK_VSC_TO_VK_EX) };
+        u16::try_from(vk).ok().filter(|vk| *vk != 0)
     }
 
     fn modifiers(&self) -> Modifiers {

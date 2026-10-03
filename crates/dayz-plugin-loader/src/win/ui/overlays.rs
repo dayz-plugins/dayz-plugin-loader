@@ -156,10 +156,30 @@ pub(crate) fn modal_dialog(
 
 fn add(entry: Entry) -> u64 {
     let id = entry.id;
+    log::debug!(
+        "ui {id} {} by {}: {:?} {:?}",
+        describe(&entry.kind),
+        entry
+            .owner
+            .map_or_else(|| "loader".to_owned(), |h| h.0.to_string()),
+        entry.title,
+        entry.text
+    );
     let mut list = entries();
     list.push(entry);
     recount(&list);
     id
+}
+
+/// What kind of thing an entry is, for the log.
+fn describe(kind: &Kind) -> &'static str {
+    match kind {
+        Kind::Passing(UiNotice::Toast, _) => "toast",
+        Kind::Passing(_, _) => "notice",
+        Kind::Modal(UiDialog::Message, _) => "message dialog",
+        Kind::Modal(UiDialog::Confirm, _) => "confirm dialog",
+        Kind::Modal(_, _) => "input dialog",
+    }
 }
 
 /// A snapshot for the render thread, in the order things were asked for.
@@ -175,9 +195,16 @@ pub(crate) fn mark_shown(ids: &[u64]) {
     for entry in list.iter_mut() {
         if entry.shown.is_none() && ids.contains(&entry.id) {
             entry.shown = Some(now);
+            log::debug!("ui {} on screen", entry.id);
         }
     }
-    list.retain(|entry| !entry.expired());
+    list.retain(|entry| {
+        let expired = entry.expired();
+        if expired {
+            log::debug!("ui {} expired", entry.id);
+        }
+        !expired
+    });
     recount(&list);
 }
 
@@ -199,6 +226,7 @@ pub(crate) fn take(id: u64) -> Option<Entry> {
     let index = list.iter().position(|e| e.id == id)?;
     let entry = list.remove(index);
     recount(&list);
+    log::debug!("ui {id} closed");
     Some(entry)
 }
 
@@ -236,5 +264,6 @@ pub(crate) fn answer_of(
     } else {
         String::new()
     };
+    log::debug!("ui {} answered {answer:?} {text:?}", entry.id);
     Some((owner, entry.id, answer, text))
 }
