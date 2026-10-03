@@ -1,0 +1,16 @@
+[package]
+name = "dayz-plugin-sdk"
+description = "Safe Rust API for writing DayZ plugin loader plugins on top of dayz-plugin-api."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+dayz-plugin-api.workspace = true
+dayz-plugin-core.workspace = true
+log.workspace = true
+
+[lints]
+workspace = true
