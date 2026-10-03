@@ -1,0 +1,33 @@
+[package]
+name = "dayz-vr-config"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+description = "Graphical editor for dayz_openxr.ini with live apply through the DayZ-VR debug plugin"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "dayz-vr-config"
+path = "src/main.rs"
+
+[dependencies]
+# Immediate-mode GUI; glow (OpenGL) backend keeps the binary small and free of C code.
+eframe = { version = "0.36", default-features = false, features = ["glow", "default_fonts", "wayland", "x11"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+too_many_lines = "warn"
+unwrap_used = "warn"
+expect_used = "warn"
