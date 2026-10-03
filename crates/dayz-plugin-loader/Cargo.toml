@@ -1,0 +1,47 @@
+[package]
+name = "dayz-plugin-loader"
+description = "DayZ plugin loader: a dxgi.dll proxy that hosts plugins, their settings, hotkeys and console."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "dxgi"
+crate-type = ["cdylib"]
+
+[dependencies]
+dayz-plugin-api.workspace = true
+dayz-plugin-core.workspace = true
+log.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+toml.workspace = true
+simplelog = "0.12"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_LibraryLoader",
+    "Win32_System_SystemServices",
+    "Win32_System_Memory",
+    "Win32_System_SystemInformation",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+# Structured exception handling needs MSVC `__try`, which mingw's gcc does not implement, so
+# the hardware fault guard exists only on the MSVC target. That is the target the shipped DLL
+# uses; see `win::guard`.
+[target.'cfg(all(windows, target_env = "msvc"))'.dependencies]
+microseh = "1"
+
+[lints]
+workspace = true

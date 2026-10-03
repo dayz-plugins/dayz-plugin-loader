@@ -1,0 +1,283 @@
+//! Executes parsed console lines against the [`State`]. Returns the plugin calls the
+//! Windows side must make after unlocking, so this stays testable without a game.
+
+use dayz_plugin_api::{PluginHandle, Status};
+use dayz_plugin_core::console::{self, Line, BUILTIN_HELP};
+use dayz_plugin_core::names;
+
+use crate::state::{Notify, State};
+
+/// What executing a line produced.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Outcome {
+    /// Status to return to a plugin that called `console_exec`.
+    pub status: Status,
+    /// Setting notifications to deliver.
+    pub notify: Vec<Notify>,
+    /// Plugin command to run: `(plugin, name, args)`.
+    pub command: Option<(PluginHandle, String, String)>,
+}
+
+impl Default for Outcome {
+    fn default() -> Self {
+        Outcome {
+            status: Status::Ok,
+            notify: Vec::new(),
+            command: None,
+        }
+    }
+}
+
+fn fail(state: &mut State, status: Status, message: String) -> Outcome {
+    state.console_print(message);
+    Outcome {
+        status,
+        ..Outcome::default()
+    }
+}
+
+/// Execute one typed line. Output goes to the state's console buffer.
+pub fn execute(state: &mut State, caller: Option<PluginHandle>, line: &str) -> Outcome {
+    if !line.trim().is_empty() {
+        state.console_print(format!("> {}", line.trim()));
+    }
+    let parsed = match console::parse(line) {
+        Ok(p) => p,
+        Err(e) => return fail(state, Status::InvalidArgument, e.to_string()),
+    };
+    match parsed {
+        Line::Empty => Outcome::default(),
+        Line::Help(None) => {
+            for (usage, help) in BUILTIN_HELP {
+                state.console_print(format!("{usage:<28} {help}"));
+            }
+            Outcome::default()
+        }
+        Line::Help(Some(name)) => help_for(state, &name),
+        Line::List(prefix) => list(state, prefix.as_deref()),
+        Line::Plugins => {
+            let lines: Vec<String> = state
+                .plugins
+                .iter()
+                .map(|p| {
+                    format!(
+                        "{} {} ({}) {}",
+                        p.name,
+                        p.version,
+                        p.file,
+                        if p.enabled { "running" } else { "disabled" }
+                    )
+                })
+                .collect();
+            for l in lines {
+                state.console_print(l);
+            }
+            Outcome::default()
+        }
+        Line::Get(name) | Line::Variable(name, None) => get(state, caller, &name),
+        Line::Set(name, value) | Line::Variable(name, Some(value)) => {
+            set(state, caller, &name, &value)
+        }
+        Line::Command(name, args) => command(state, caller, &name, &args),
+    }
+}
+
+fn get(state: &mut State, caller: Option<PluginHandle>, name: &str) -> Outcome {
+    match state.get_setting(caller, name) {
+        Ok(value) => {
+            state.console_print(format!("{name} = {value}"));
+            Outcome::default()
+        }
+        Err(status) => fail(state, status, format!("unknown setting {name}")),
+    }
+}
+
+fn set(state: &mut State, caller: Option<PluginHandle>, name: &str, value: &str) -> Outcome {
+    match state.set_setting(caller, name, value) {
+        Ok(notify) => {
+            if let Ok(v) = state.get_setting(caller, name) {
+                state.console_print(format!("{name} = {v}"));
+            }
+            Outcome {
+                notify: notify.into_iter().collect(),
+                ..Outcome::default()
+            }
+        }
+        Err((status, message)) => fail(state, status, message),
+    }
+}
+
+fn command(state: &mut State, caller: Option<PluginHandle>, name: &str, args: &str) -> Outcome {
+    // A dotted name is a setting when one matches, otherwise a plugin command.
+    if state.get_setting(caller, name).is_ok() {
+        return if args.is_empty() {
+            get(state, caller, name)
+        } else {
+            set(state, caller, name, args)
+        };
+    }
+    let Some((plugin, cmd)) = names::split_qualified(name) else {
+        return fail(state, Status::NotFound, format!("unknown command {name}"));
+    };
+    let Some(handle) = state.find_plugin(plugin) else {
+        return fail(state, Status::NotFound, format!("no plugin named {plugin}"));
+    };
+    let known = state
+        .plugin(handle)
+        .is_some_and(|p| p.enabled && p.commands.contains_key(cmd));
+    if !known {
+        return fail(state, Status::NotFound, format!("unknown command {name}"));
+    }
+    Outcome {
+        command: Some((handle, cmd.to_owned(), args.to_owned())),
+        ..Outcome::default()
+    }
+}
+
+fn help_for(state: &mut State, name: &str) -> Outcome {
+    let mut lines = Vec::new();
+    if let Some((plugin, key)) = names::split_qualified(name) {
+        if let Some(record) = state.find_plugin(plugin).and_then(|h| state.plugin(h)) {
+            if let Some(desc) = record.settings.desc(key) {
+                lines.push(format!(
+                    "{name}: {} ({:?}, default {})",
+                    desc.title, desc.kind, desc.default
+                ));
+                if !desc.description.is_empty() {
+                    lines.push(format!("  {}", desc.description));
+                }
+                if !desc.choices.is_empty() {
+                    lines.push(format!("  choices: {}", desc.choices.join(", ")));
+                }
+            }
+            if let Some(cmd) = record.commands.get(key) {
+                lines.push(format!("{name} {}: {}", cmd.usage, cmd.help));
+            }
+        }
+    }
+    if lines.is_empty() {
+        return fail(
+            state,
+            Status::NotFound,
+            format!("nothing known about {name}"),
+        );
+    }
+    for l in lines {
+        state.console_print(l);
+    }
+    Outcome::default()
+}
+
+fn list(state: &mut State, prefix: Option<&str>) -> Outcome {
+    let mut lines = Vec::new();
+    for record in &state.plugins {
+        for (desc, value) in record.settings.iter() {
+            lines.push(format!("{}.{} = {value}", record.name, desc.key));
+        }
+        for (cmd, info) in &record.commands {
+            lines.push(format!("{}.{cmd} {}", record.name, info.usage));
+        }
+    }
+    lines.retain(|l| prefix.is_none_or(|p| l.starts_with(p)));
+    if lines.is_empty() {
+        lines.push("nothing registered".to_owned());
+    }
+    for l in lines {
+        state.console_print(l);
+    }
+    Outcome::default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::tests::{desc, started, state};
+    use crate::state::{CommandInfo, Phase};
+
+    fn fixture() -> (State, PluginHandle) {
+        let mut s = state();
+        let h = started(&mut s, "vr");
+        s.register_setting(h, desc("ipd"))
+            .unwrap_or_else(|e| panic!("{e:?}"));
+        s.register_command(
+            h,
+            "recenter",
+            CommandInfo {
+                help: "Recenter.".into(),
+                usage: String::new(),
+            },
+        )
+        .unwrap_or_else(|e| panic!("{e:?}"));
+        s.phase = Phase::Running;
+        s.set_enabled(h, true);
+        (s, h)
+    }
+
+    fn last(s: &State) -> &str {
+        s.console.back().map_or("", String::as_str)
+    }
+
+    #[test]
+    fn get_set_and_shorthand() {
+        let (mut s, h) = fixture();
+        assert_eq!(execute(&mut s, None, "get vr.ipd").status, Status::Ok);
+        assert_eq!(last(&s), "vr.ipd = 1");
+        let out = execute(&mut s, None, "set vr.ipd 3");
+        assert_eq!(
+            out.notify,
+            vec![Notify::SettingChanged {
+                plugin: h,
+                key: "ipd".into(),
+                value: "3".into()
+            }]
+        );
+        assert_eq!(last(&s), "vr.ipd = 3");
+        assert_eq!(execute(&mut s, None, "vr.ipd 5").notify.len(), 1);
+        assert_eq!(execute(&mut s, None, "vr.ipd").status, Status::Ok);
+        assert_eq!(last(&s), "vr.ipd = 5");
+        assert_eq!(
+            execute(&mut s, None, "vr.ipd 50").status,
+            Status::InvalidArgument
+        );
+        assert_eq!(
+            execute(&mut s, None, "set vr.ipd").status,
+            Status::InvalidArgument
+        );
+        let _ = std::fs::remove_dir_all(&s.paths.game_dir);
+    }
+
+    #[test]
+    fn commands_route_to_plugin() {
+        let (mut s, h) = fixture();
+        let out = execute(&mut s, None, "vr.recenter now");
+        assert_eq!(out.command, Some((h, "recenter".into(), "now".into())));
+        assert_eq!(execute(&mut s, None, "vr.missing").status, Status::NotFound);
+        assert_eq!(execute(&mut s, None, "nope.x").status, Status::NotFound);
+        assert_eq!(last(&s), "no plugin named nope");
+        s.set_enabled(h, false);
+        assert_eq!(
+            execute(&mut s, None, "vr.recenter").status,
+            Status::NotFound
+        );
+    }
+
+    #[test]
+    fn help_list_and_plugins() {
+        let (mut s, _) = fixture();
+        execute(&mut s, None, "help");
+        assert!(s.console.iter().any(|l| l.starts_with("plugins")));
+        execute(&mut s, None, "help vr.recenter");
+        assert_eq!(last(&s), "vr.recenter : Recenter.");
+        assert_eq!(
+            execute(&mut s, None, "help vr.what").status,
+            Status::NotFound
+        );
+        execute(&mut s, None, "list vr.i");
+        assert_eq!(last(&s), "vr.ipd = 1");
+        execute(&mut s, None, "list zzz");
+        assert_eq!(last(&s), "nothing registered");
+        execute(&mut s, None, "plugins");
+        assert_eq!(last(&s), "vr 1 (vr.dll) running");
+        assert_eq!(execute(&mut s, None, "   "), Outcome::default());
+    }
+}
