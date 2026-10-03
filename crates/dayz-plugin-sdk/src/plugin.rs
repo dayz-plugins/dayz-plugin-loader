@@ -5,6 +5,7 @@ use dayz_plugin_api::StopReason;
 use crate::deps::Dependency;
 use crate::dialogs::Shown;
 use crate::host::{Host, PluginError, PluginRef};
+use crate::input::{Input, Verdict};
 use crate::ui::Ui;
 
 /// The game's swapchain, as handed to [`Plugin::on_swapchain`].
@@ -132,6 +133,17 @@ pub trait Plugin: Sized + Send + Sync + 'static {
         _answer: dayz_plugin_api::UiAnswer,
         _text: &str,
     ) {
+    }
+
+    /// An input event of a kind this plugin subscribed to with
+    /// [`Host::listen_input`](crate::Host::listen_input), before the game sees it.
+    ///
+    /// Return [`Verdict::SWALLOW`] to keep it from the game, [`Verdict::PASS`] to let it
+    /// through. Called from inside the game's message loop, for every matching event, so it
+    /// must return immediately: hand the work to the plugin's own thread rather than doing
+    /// it here.
+    fn on_input(&self, _host: &Host, _input: &Input<'_>) -> Verdict {
+        Verdict::PASS
     }
 
     /// A subscribed broadcast topic was published.

@@ -15,7 +15,7 @@
 #![allow(unsafe_code)]
 
 use core::ffi::c_void;
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::Mutex;
 
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
@@ -31,6 +31,12 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 /// The window procedure that was there before, as a raw pointer. Zero means not subclassed.
 static PREVIOUS: AtomicIsize = AtomicIsize::new(0);
+
+/// Set when a plugin swallowed the key message currently being handled.
+///
+/// A flag rather than a return value because the keyboard arm decodes the message deep inside
+/// `record`, and threading an answer back out of it would change every other arm.
+static SWALLOW_KEY: AtomicBool = AtomicBool::new(false);
 
 /// What the window procedure collected since the last frame.
 struct Pending {
@@ -148,6 +154,13 @@ unsafe extern "system" fn procedure(
     let input = record(msg, wparam, lparam, capturing);
     if capturing && input {
         // Swallowed: the overlay has the keyboard and mouse for as long as it is open.
+        return LRESULT(0);
+    }
+    // Plugins see what the overlay did not take, and before the game does.
+    if super::forward::message(msg, wparam, lparam, pending().modifiers) {
+        return LRESULT(0);
+    }
+    if SWALLOW_KEY.swap(false, Ordering::Relaxed) {
         return LRESULT(0);
     }
     let previous = PREVIOUS.load(Ordering::Acquire);
@@ -277,6 +290,16 @@ fn keyboard(msg: u32, wparam: WPARAM, lparam: LPARAM) {
         guard.last_key = Some((vk, scancode));
         guard.presses.push((scancode, vk));
     }
+    // Offered to plugins from here rather than from `forward`, because this is where the
+    // scan code and the auto-repeat bit have already been worked out. The lock is dropped
+    // first: a plugin's `on_input` can call back into the loader.
+    let modifiers = guard.modifiers;
+    let repeat = pressed && bits & 0x4000_0000 != 0;
+    drop(guard);
+    if super::forward::keyboard(vk, scancode, pressed, repeat, modifiers) {
+        SWALLOW_KEY.store(true, Ordering::Relaxed);
+    }
+    let mut guard = pending();
     if let Some(key) = key_of(vk) {
         let modifiers = guard.modifiers;
         guard.events.push(Event::Key {

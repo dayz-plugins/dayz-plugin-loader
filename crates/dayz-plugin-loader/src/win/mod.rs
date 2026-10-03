@@ -13,10 +13,13 @@ mod exports;
 mod guard;
 mod hooks;
 mod hostapi;
+mod hostapi_input;
 mod input;
+mod input_send;
 mod lifecycle;
 mod memory;
 mod plugin_hooks;
+mod plugin_input;
 mod plugins;
 mod ui;
 mod vtable;
@@ -147,6 +150,7 @@ fn init() -> bool {
     guard.symbol_lines = data::console_lines;
     guard.hook_lines = plugin_hooks::console_lines;
     guard.read_lines = memory::console_lines;
+    guard.input_lines = plugin_input::summary;
     // The loader's own overlay actions. Bound by scan code, not by key name: 0x29 is the key
     // under Escape on every layout, and its virtual key code is a different one on each — the
     // reason binding it by name worked on one keyboard and not on the next.
@@ -196,6 +200,11 @@ fn plugin_summary(running: usize, plugins: &[crate::state::PluginRecord]) -> Str
         return format!("{} plugins found, none running", plugins.len());
     }
     format!("{running} running: {}", names.join(", "))
+}
+
+/// The game's output window, or null before the swapchain exists.
+pub(crate) fn game_window() -> *mut c_void {
+    GAME_WINDOW.load(Ordering::Relaxed)
 }
 
 /// Remember the game's output window, used to gate hotkeys on focus.

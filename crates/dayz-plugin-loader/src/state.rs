@@ -147,6 +147,8 @@ pub struct State {
     /// Produces the lines the `read` command prints, for the same reason as the two above:
     /// reading the game's memory is the platform layer's business.
     pub read_lines: fn(&str, Option<usize>) -> Vec<String>,
+    /// Produces the lines the `input` command prints: who watches the input stream.
+    pub input_lines: fn() -> Vec<String>,
     /// Where the overlay's windows were left, and whether advanced settings are shown.
     pub windows: windows::Layout,
 }
@@ -159,6 +161,11 @@ fn no_symbols(_prefix: Option<&str>) -> Vec<String> {
 /// Default for [`State::read_lines`]: no platform layer, so no memory to read.
 fn no_memory(_target: &str, _count: Option<usize>) -> Vec<String> {
     vec!["reading memory needs the platform layer".to_owned()]
+}
+
+/// Default for [`State::input_lines`]: no platform layer, so no window to watch.
+fn no_input() -> Vec<String> {
+    Vec::new()
 }
 
 /// Default for [`State::hook_lines`]: no platform layer, so no hooks.
@@ -194,6 +201,7 @@ impl State {
             symbol_lines: no_symbols,
             hook_lines: no_hooks,
             read_lines: no_memory,
+            input_lines: no_input,
         }
     }
 

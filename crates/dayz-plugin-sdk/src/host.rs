@@ -15,6 +15,7 @@ use dayz_plugin_api::{
 };
 pub use dayz_plugin_core::cmdline::{Arg, CommandLine};
 
+use crate::input::{Action, Watch};
 use crate::settings::{Setting, SettingKind};
 
 /// Error type for plugin code. Carries a loader status or a message.
@@ -692,6 +693,72 @@ impl Host {
             )
         })?;
         Ok((Hook(id), trampoline))
+    }
+
+    /// Subscribe to input events of these kinds, delivered to
+    /// [`Plugin::on_input`](crate::Plugin::on_input).
+    ///
+    /// Callable at any time, not only during `start`: a plugin that only wants input while it
+    /// is doing something asks for it then and passes [`Watch::NONE`] when it is done. The
+    /// last call wins.
+    ///
+    /// # Errors
+    /// The plugin has no `on_input` implementation to deliver to.
+    pub fn listen_input(&self, kinds: Watch) -> Result<(), PluginError> {
+        // SAFETY: valid table pointer.
+        check(unsafe { (self.api.input_listen)(self.api.host, self.handle, kinds) })
+    }
+
+    /// Send input to the system, in order, as one burst.
+    ///
+    /// Real system input rather than a message posted to the game's window, because DayZ
+    /// reads the mouse through raw input and the keyboard through a polled table and neither
+    /// notices a synthesised message. It goes to whichever window has the focus, and comes
+    /// back around through `on_input` like anything else — a plugin that both sends and
+    /// watches must be ready to see its own input.
+    ///
+    /// # Errors
+    /// An action this loader does not know, or a system that refused the injection.
+    pub fn send_input(&self, actions: &[Action]) -> Result<(), PluginError> {
+        if actions.is_empty() {
+            return Ok(());
+        }
+        // `Action` is a single-field tuple struct around the ABI structure, so the slice can
+        // be handed over as it is rather than copied.
+        // SAFETY: a newtype around `InputAction` has that type's layout.
+        let actions: &[dayz_plugin_api::InputAction] =
+            unsafe { core::slice::from_raw_parts(actions.as_ptr().cast(), actions.len()) };
+        // SAFETY: the slice is readable for its length for the duration of the call.
+        check(unsafe {
+            (self.api.input_send)(self.api.host, self.handle, actions.as_ptr(), actions.len())
+        })
+    }
+
+    /// Whether a key is physically down now, by Win32 virtual key code.
+    #[must_use]
+    pub fn key_down(&self, vk: u16) -> bool {
+        let mut down = 0u32;
+        // SAFETY: `down` is a valid out-pointer.
+        let status = unsafe {
+            (self.api.input_key_down)(self.api.host, self.handle, u32::from(vk), &raw mut down)
+        };
+        status == Status::Ok && down != 0
+    }
+
+    /// Ask the system for raw input from an HID usage the game never registered: 1/4 for a
+    /// joystick, 1/5 for a gamepad, 1/8 for a multi-axis controller.
+    ///
+    /// Reports then arrive as [`Input::Hid`](crate::Input::Hid) for every plugin watching
+    /// [`Watch::HID`]. The game's own mouse and keyboard registration is left alone.
+    ///
+    /// # Errors
+    /// A usage page outside the generic desktop and VR pages, a window that does not exist
+    /// yet, or a system that refused the registration.
+    pub fn register_hid(&self, usage_page: u16, usage: u16) -> Result<(), PluginError> {
+        // SAFETY: valid table pointer.
+        check(unsafe {
+            (self.api.input_register_hid)(self.api.host, self.handle, usage_page, usage)
+        })
     }
 
     /// Undo one hook now. The loader undoes whatever is left when the plugin stops, so this

@@ -15,6 +15,7 @@ use dayz_plugin_api::{
 
 use crate::dialogs::Shown;
 use crate::host::{bytes_from, str_from, Host, PluginError, PluginRef};
+use crate::input::Input;
 use crate::logger::HostLogger;
 use crate::plugin::{Plugin, PresentInfo, SwapchainInfo};
 use crate::ui::Ui;
@@ -153,6 +154,7 @@ pub unsafe fn start<P: Plugin>(
             on_disable: Some(on_disable::<P>),
             on_ui: Some(on_ui::<P>),
             on_dialog: Some(on_dialog::<P>),
+            on_input: Some(on_input::<P>),
         });
     }
     Status::Ok
@@ -340,6 +342,23 @@ unsafe extern "C" fn on_dialog<P: Plugin>(
     guard(s, "on_dialog", |s| {
         s.plugin.on_dialog(&s.host, Shown(id), answer, &text);
     });
+}
+
+unsafe extern "C" fn on_input<P: Plugin>(
+    ctx: *mut c_void,
+    event: *const api::InputEvent,
+) -> api::InputResponse {
+    // SAFETY: documented pointer contracts of this callback.
+    let s = unsafe { state::<P>(ctx) };
+    // SAFETY: as above; the borrow ends with this call, which is what the ABI promises.
+    let Some(input) = (unsafe { Input::from_abi(event) }) else {
+        return api::InputResponse::PASS;
+    };
+    let mut verdict = api::InputResponse::PASS;
+    guard(s, "on_input", |s| {
+        verdict = s.plugin.on_input(&s.host, &input);
+    });
+    verdict
 }
 
 unsafe extern "C" fn on_event<P: Plugin>(

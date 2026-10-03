@@ -12,6 +12,7 @@
 
 mod chrome;
 mod console_panel;
+mod forward;
 mod frame;
 mod overlays;
 mod paint;

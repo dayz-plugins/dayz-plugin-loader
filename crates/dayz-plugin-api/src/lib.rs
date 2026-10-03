@@ -18,10 +18,15 @@ use core::ffi::c_void;
 
 mod callbacks;
 mod host;
+mod input;
 mod types;
 
 pub use callbacks::{PluginCallbacks, PresentInfo, SwapchainInfo};
 pub use host::{HostApi, LineFn, ReplyFn};
+pub use input::{
+    InputAction, InputActionFlags, InputActionKind, InputEvent, InputKind, InputMask,
+    InputModifiers, InputResponse,
+};
 pub use types::{
     ArgEntry, Bytes, CommandDesc, Dependency, DependencyKind, DialogDesc, EnvEntry, HotkeyDesc,
     LogLevel, NoticeDesc, PanelDesc, PluginHandle, PluginInfo, SettingDesc, SettingFlags,
@@ -35,8 +40,10 @@ pub use types::{
 /// [`HostApi::console_capture`]. 4 added the UI panels: [`PanelDesc`],
 /// [`HostApi::panel_register`], [`HostApi::ui_widget`] and the `on_ui` callback. 5 added the
 /// toasts, notices and dialogs: [`HostApi::notice_show`], [`HostApi::dialog_open`],
-/// [`HostApi::ui_close`] and the `on_dialog` callback.
-pub const API_VERSION: u32 = 5;
+/// [`HostApi::ui_close`] and the `on_dialog` callback. 6 added the input stream:
+/// [`HostApi::input_listen`], [`HostApi::input_send`], [`HostApi::input_key_down`],
+/// [`HostApi::input_register_hid`] and the `on_input` callback.
+pub const API_VERSION: u32 = 6;
 
 /// Name of the export every plugin must provide: `extern "C" fn() -> *const PluginInfo`.
 pub const DESCRIBE_EXPORT: &str = "dayz_plugin_describe";

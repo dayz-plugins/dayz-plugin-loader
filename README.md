@@ -276,6 +276,57 @@ not part of it. This is the whole mechanism behind
 [dayz-debug-plugin](https://github.com/dayz-plugins/dayz-debug-plugin), which serves the
 console on a loopback socket without knowing what a single command means.
 
+### Input
+
+The loader owns the game's window procedure, so it sees every key, every mouse message and
+every `WM_INPUT` first. A plugin can watch that stream, take events out of it, and put its own
+in:
+
+```rust
+host.listen_input(Watch::KEY | Watch::MOUSE_MOVE)?;   // any time, not only in start
+
+fn on_input(&self, _host: &Host, input: &Input<'_>) -> Verdict {
+    match input {
+        Input::MouseMove { dx, dy, raw: true, .. } => {
+            self.look(*dx, *dy);
+            Verdict::SWALLOW          // the game does not see this one
+        }
+        _ => Verdict::PASS,
+    }
+}
+```
+
+```rust
+// Sending: real system input, in one burst, so a chord arrives as a chord.
+host.send_input(&[Action::key_down(0x57), Action::mouse_move(12, 0), Action::key_up(0x57)])?;
+host.send_input(&[Action::scancode(0x11, true)])?;    // by position, which DayZ binds on
+let sprinting = host.key_down(0x10);                  // VK_SHIFT, right now
+host.register_hid(0x01, 0x05)?;                       // raw reports from gamepads
+```
+
+`SendInput` rather than a message posted to the window, because DayZ reads the mouse through
+raw input and the keyboard through a polled table and neither notices a synthesised
+`WM_KEYDOWN`. The consequence worth knowing: sent input comes back around through `on_input`
+like anything else, so a plugin that both sends and watches sees its own.
+
+Three rules hold the stream together:
+
+- **The overlay wins.** While a loader window has the keyboard, neither plugins nor the game
+  get the event — someone typing a console command is not aiming.
+- **The first swallow ends delivery.** Two plugins cannot each believe they own an event. The
+  console's `input` command lists who is watching and how much has been taken.
+- **A kind nobody asked for costs nothing.** The window procedure checks one atomic before it
+  builds an event, which is why `Watch::NONE` is worth passing when a plugin is done.
+
+`on_input` runs inside the game's message loop, for every matching event. It must return
+immediately; a plugin with real work to do hands it to its own thread. A plugin that faults in
+there is disabled like anywhere else, and the event passes.
+
+This exists for [dayz-vr-plugin](https://github.com/dayz-plugins/dayz-vr-plugin), which turns
+head and controller motion into input the game already understands, and
+[dayz-dinput-plugin](https://github.com/dayz-plugins/dayz-dinput-plugin), which reads devices
+the game never asked the system for.
+
 ### Hooks
 
 A plugin can patch the game, but registering the hook through the loader means the loader
@@ -303,13 +354,21 @@ Build it as a `cdylib` for `x86_64-pc-windows-msvc` and drop the DLL into
 A plugin in another language only needs the three exports and the structs from
 `crates/dayz-plugin-api`; nothing in the ABI is Rust specific.
 
-The ABI carries a version (`API_VERSION`, currently 4) and every struct its own `struct_size`,
+The ABI carries a version (`API_VERSION`, currently 6) and every struct its own `struct_size`,
 so the loader refuses a plugin built against a different version rather than reading a shorter
 table. Fields are only ever appended; a version bump means an existing field changed meaning.
 Version 2 added dependencies and the lifecycle callbacks, version 3 the hook registry and
-`console_capture`, version 4 the UI panels and `on_ui`. A plugin and the loader it runs in
-must come from the same version, which in practice means rebuilding plugins when the loader's
-ABI moves.
+`console_capture`, version 4 the UI panels and `on_ui`, version 5 the toasts, notices and
+dialogs, version 6 the input stream and `on_input`. A plugin and the loader it runs in must
+come from the same version, which in practice means rebuilding plugins when the loader's ABI
+moves.
+
+Two of the input types — `InputResponse` and `InputActionKind` — are transparent structs with
+constants rather than enums, because those two travel from the plugin to the loader. A plugin
+built against a later ABI could hold a value this loader has never heard of, and reading that
+into a Rust enum would be undefined behaviour instead of something the loader can refuse.
+`InputKind` stays an enum: it travels the other way, and a kind added later has a mask bit an
+older plugin never sets, so it is never delivered to one.
 
 ## Game addresses
 
@@ -356,6 +415,7 @@ cargo run -p dayz-data-tool -- validate ../dayz-data --exe "$DAYZ_DIR/DayZ_x64.e
 | Repository | What it is |
 | --- | --- |
 | [dayz-data](https://github.com/dayz-plugins/dayz-data) | The address database: patterns, per-build caches, seeds. |
+| [dayz-patches-plugin](https://github.com/dayz-plugins/dayz-patches-plugin) | Workarounds for engine bugs, one switch each |
 | [dayz-debug-plugin](https://github.com/dayz-plugins/dayz-debug-plugin) | The console, settings and state on a loopback socket, plus `dayz-ctl` to talk to it from a shell. |
 | [dayz-plugins.github.io](https://github.com/dayz-plugins/dayz-plugins.github.io) | All prose documentation: research notes and design documents. |
 

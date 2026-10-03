@@ -82,6 +82,16 @@ pub fn execute(state: &mut State, caller: Option<PluginHandle>, line: &str) -> O
             }
             Outcome::default()
         }
+        Line::Input => {
+            let mut lines = (state.input_lines)();
+            if lines.is_empty() {
+                lines.push("no plugin is watching the input stream".to_owned());
+            }
+            for line in lines {
+                state.console_print(line);
+            }
+            Outcome::default()
+        }
         Line::Read(target, count) => {
             for line in (state.read_lines)(&target, count) {
                 state.console_print(line);

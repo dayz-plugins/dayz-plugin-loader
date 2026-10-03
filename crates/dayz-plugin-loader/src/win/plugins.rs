@@ -157,6 +157,9 @@ impl Active {
         // Same reasoning as the hooks: a window a plugin left on screen must not outlive it,
         // and a dialog still waiting for an answer is told nobody is coming.
         super::ui::close_all_for(self.handle);
+        // And an input subscription must not outlive it either, or the window procedure keeps
+        // paying for a plugin that is gone.
+        super::plugin_input::forget(self.handle);
     }
 }
 
@@ -357,6 +360,7 @@ pub(super) fn start_one(described: &Described) -> Result<Active, String> {
             }
         }
         super::plugin_hooks::remove_all(handle, name);
+        super::plugin_input::forget(handle);
         return Err(failure);
     }
     if callbacks.struct_size < core::mem::size_of::<PluginCallbacks>() {

@@ -5,11 +5,17 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use dayz_plugin_sdk::api::{StopReason, UiAnswer, UiLevel};
 use dayz_plugin_sdk::{
-    export_plugin, Dialog, Host, Notice, Plugin, PluginError, PresentInfo, Setting, Shown, Ui,
+    export_plugin, Action, Dialog, Host, Input, Notice, Plugin, PluginError, PresentInfo, Setting,
+    Shown, Ui, Verdict, Watch,
 };
+
+/// F8, the key this plugin swallows while it is watching the input stream.
+const VK_F8: u16 = 0x77;
 
 struct Hello {
     frames: AtomicU64,
+    /// Whether `hello.watch` turned the input stream on.
+    watching: std::sync::atomic::AtomicBool,
 }
 
 impl Plugin for Hello {
@@ -38,12 +44,23 @@ impl Plugin for Hello {
             "Print the greeting with an optional name.",
             "[name]",
         )?;
+        host.command(
+            "watch",
+            "Print every key and wheel event, and swallow F8. Off again with `off`.",
+            "[on|off]",
+        )?;
+        host.command(
+            "press",
+            "Send a key press to the game, by name.",
+            "<f9|w|space>",
+        )?;
         // The loader owns the window, the layout and the device; this plugin only fills the
         // body in `on_ui`. F10 toggles it, and the user can rebind that in hotkeys.toml.
         host.panel("demo", "Hello plugin", false, "f10")?;
         log::info!("started in {}", host.game_dir());
         Ok(Hello {
             frames: AtomicU64::new(0),
+            watching: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -64,6 +81,12 @@ impl Plugin for Hello {
     fn on_command(&self, host: &Host, name: &str, args: &str) -> Result<(), PluginError> {
         if name == "where" {
             return Self::where_is(host, args);
+        }
+        if name == "watch" {
+            return self.watch(host, args);
+        }
+        if name == "press" {
+            return Self::press(host, args);
         }
         if name != "greet" {
             return Err(PluginError::Unsupported);
@@ -139,6 +162,39 @@ impl Plugin for Hello {
         }
     }
 
+    fn on_input(&self, host: &Host, input: &Input<'_>) -> Verdict {
+        if !self.watching.load(Ordering::Relaxed) {
+            return Verdict::PASS;
+        }
+        match input {
+            // Only the presses, and only the first of an auto-repeat: a held key would
+            // otherwise print a line per repeat.
+            Input::Key {
+                vk,
+                scancode,
+                pressed: true,
+                repeat: false,
+                held,
+            } => {
+                host.console_print(&format!(
+                    "key {vk:#04x} (sc{scancode:x}){}",
+                    modifier_note(*held)
+                ));
+                // Swallowing F8 is the part worth demonstrating: the game never sees
+                // it while this plugin is watching.
+                if *vk == VK_F8 {
+                    return Verdict::SWALLOW;
+                }
+                Verdict::PASS
+            }
+            Input::Wheel { notches, .. } => {
+                host.console_print(&format!("wheel {notches:+.0}"));
+                Verdict::PASS
+            }
+            _ => Verdict::PASS,
+        }
+    }
+
     fn on_setting_changed(&self, _host: &Host, key: &str, value: &str) {
         log::info!("setting {key} is now {value:?}");
     }
@@ -167,6 +223,46 @@ impl Plugin for Hello {
 }
 
 impl Hello {
+    /// Turn the input stream on or off.
+    ///
+    /// The subscription is asked for here rather than in `start` to show that it can be: a
+    /// plugin that only wants input sometimes should not make the window procedure pay for it
+    /// the rest of the time.
+    fn watch(&self, host: &Host, args: &str) -> Result<(), PluginError> {
+        let on = !matches!(args.trim(), "off" | "0" | "false");
+        host.listen_input(if on {
+            Watch::KEY | Watch::MOUSE_WHEEL
+        } else {
+            Watch::NONE
+        })?;
+        self.watching.store(on, Ordering::Relaxed);
+        host.console_print(if on {
+            "watching keys and the wheel; F8 is swallowed"
+        } else {
+            "no longer watching"
+        });
+        Ok(())
+    }
+
+    /// Send one key to the game, pressed and released.
+    fn press(host: &Host, args: &str) -> Result<(), PluginError> {
+        let vk = match args.trim().to_ascii_lowercase().as_str() {
+            "f9" => 0x78,
+            "space" => 0x20,
+            one if one.len() == 1 => one.to_ascii_uppercase().as_bytes()[0].into(),
+            other => {
+                return Err(PluginError::Message(format!(
+                    "{other:?} is not a key this command knows"
+                )))
+            }
+        };
+        // Both halves in one call, so the game sees a press and a release together rather
+        // than a key that stays down if the second call never happens.
+        host.send_input(&[Action::key_down(vk), Action::key_up(vk)])?;
+        host.console_print(&format!("sent {vk:#04x}"));
+        Ok(())
+    }
+
     /// Look a game address up by name. A plugin never carries an address of its own: the
     /// name resolves through the loader's dayz-data database, so a game update changes the
     /// database rather than this plugin.
@@ -179,6 +275,25 @@ impl Hello {
         let address = host.symbol(symbol)?;
         host.console_print(&format!("{symbol} is at {address:p}"));
         Ok(())
+    }
+}
+
+/// `" with ctrl+shift"`, or nothing when no modifier was held.
+fn modifier_note(held: dayz_plugin_sdk::Held) -> String {
+    let names = [
+        ("ctrl", held.ctrl),
+        ("alt", held.alt),
+        ("shift", held.shift),
+    ];
+    let held: Vec<&str> = names
+        .iter()
+        .filter(|(_, on)| *on)
+        .map(|(name, _)| *name)
+        .collect();
+    if held.is_empty() {
+        String::new()
+    } else {
+        format!(" with {}", held.join("+"))
     }
 }
 

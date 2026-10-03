@@ -2,6 +2,7 @@
 
 use core::ffi::c_void;
 
+use crate::input::{InputAction, InputMask};
 use crate::types::{
     ArgEntry, Bytes, CommandDesc, DialogDesc, EnvEntry, HotkeyDesc, LogLevel, NoticeDesc,
     PanelDesc, PluginHandle, SettingDesc, Status, Str, UiValue, UiWidget,
@@ -286,5 +287,46 @@ pub struct HostApi {
         line: Str,
         sink: Option<LineFn>,
         line_ctx: *mut c_void,
+    ) -> Status,
+
+    /// Subscribe to input events of the kinds in `mask`, delivered to `on_input`.
+    ///
+    /// Callable at any time, not only during `start`: a plugin that only wants input while it
+    /// is doing something asks for it then and passes [`InputMask::NONE`] afterwards. The
+    /// last call wins; a plugin without an `on_input` callback is refused.
+    pub input_listen:
+        unsafe extern "C" fn(host: *mut c_void, plugin: PluginHandle, mask: InputMask) -> Status,
+
+    /// Send input to the system, as though a device had produced it.
+    ///
+    /// The whole array goes in one burst, in order, so a chord arrives as a chord. This is
+    /// real system input — it reaches whichever window has the focus, which is normally the
+    /// game — and it comes back around through `on_input` like anything else.
+    pub input_send: unsafe extern "C" fn(
+        host: *mut c_void,
+        plugin: PluginHandle,
+        actions: *const InputAction,
+        count: usize,
+    ) -> Status,
+
+    /// Whether a key is physically down now, by Win32 virtual key code.
+    pub input_key_down: unsafe extern "C" fn(
+        host: *mut c_void,
+        plugin: PluginHandle,
+        vk: u32,
+        out_down: *mut u32,
+    ) -> Status,
+
+    /// Ask the system for raw input from an HID usage the game never registered.
+    ///
+    /// `usage_page` and `usage` are the HID pair — 1/4 joystick, 1/5 gamepad, 1/8 multi-axis
+    /// controller. Reports then arrive as [`InputKind::Hid`](crate::InputKind::Hid) events
+    /// for every plugin subscribed to that kind. Registering is cumulative and the loader
+    /// keeps the game's own mouse and keyboard registration untouched.
+    pub input_register_hid: unsafe extern "C" fn(
+        host: *mut c_void,
+        plugin: PluginHandle,
+        usage_page: u16,
+        usage: u16,
     ) -> Status,
 }

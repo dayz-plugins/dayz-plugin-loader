@@ -112,6 +112,36 @@ pub(crate) fn dialog(handle: PluginHandle, id: u64, answer: api::UiAnswer, text:
     });
 }
 
+/// Offer one input event to a plugin, and report whether it swallowed it.
+///
+/// Runs inside the game's message loop, so the guard matters more here than anywhere: a
+/// plugin that faults while the window procedure is on the stack would take the game's input
+/// handling with it. A fault answers `Pass` and disables the plugin.
+pub(crate) fn input(handle: PluginHandle, event: &api::InputEvent) -> api::InputResponse {
+    let Some(plugin) = plugins::find(handle) else {
+        return api::InputResponse::PASS;
+    };
+    let Some(cb) = plugin.callbacks.on_input else {
+        return api::InputResponse::PASS;
+    };
+    if !plugin.is_enabled() {
+        return api::InputResponse::PASS;
+    }
+    let ctx = plugin.callbacks.ctx;
+    let mut answer = api::InputResponse::PASS;
+    to_plugin(plugin, "on_input", || {
+        // SAFETY: `event` outlives the call and `ctx` is the plugin's own context.
+        answer = unsafe { cb(ctx, &raw const *event) };
+    });
+    // A value from a newer ABI reads as `Pass`, so a plugin cannot eat the game's input by
+    // returning something this loader does not know.
+    if answer == api::InputResponse::SWALLOW {
+        api::InputResponse::SWALLOW
+    } else {
+        api::InputResponse::PASS
+    }
+}
+
 /// A hotkey fired. `action` is the qualified `<plugin>.<action>` name.
 pub(crate) fn hotkey(action: &str) {
     let Some((name, bare)) = action.split_once('.') else {

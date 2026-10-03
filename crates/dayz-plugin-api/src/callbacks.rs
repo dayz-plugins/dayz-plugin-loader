@@ -3,6 +3,7 @@
 use core::ffi::c_void;
 
 use crate::host::ReplyFn;
+use crate::input::{InputEvent, InputResponse};
 use crate::types::{Bytes, PluginHandle, Status, Str, UiAnswer};
 
 /// Information about the game's swapchain, passed when it is created or recreated.
@@ -97,6 +98,17 @@ pub struct PluginCallbacks {
     /// dialog and is empty otherwise.
     pub on_dialog:
         Option<unsafe extern "C" fn(ctx: *mut c_void, id: u64, answer: UiAnswer, text: Str)>,
+
+    /// An input event of a kind this plugin subscribed to, before the game sees it.
+    ///
+    /// Returns an [`InputResponse`]: `Swallow` keeps the message from the game's own window
+    /// procedure. Called from inside the game's message loop, so it must return immediately;
+    /// anything slower belongs on the plugin's own thread.
+    ///
+    /// A value the loader does not know is read as [`InputResponse::PASS`], so a plugin built
+    /// against a newer ABI cannot accidentally eat the game's input.
+    pub on_input:
+        Option<unsafe extern "C" fn(ctx: *mut c_void, event: *const InputEvent) -> InputResponse>,
 }
 
 impl PluginCallbacks {
@@ -118,6 +130,7 @@ impl PluginCallbacks {
             on_disable: None,
             on_ui: None,
             on_dialog: None,
+            on_input: None,
         }
     }
 }
