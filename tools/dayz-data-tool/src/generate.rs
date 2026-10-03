@@ -147,10 +147,10 @@ pub fn generate(
         build: BuildInfo {
             version: seed.version.clone(),
             executable: executable.to_owned(),
-            sha256: sha256.to_owned(),
-            file_size: image.file_size,
-            pe_timestamp: Some(format!("{:#X}", image.timestamp).replace("0X", "0x")),
-            image_size: Some(format!("{:#X}", image.size_of_image).replace("0X", "0x")),
+            sha256: Some(sha256.to_owned()),
+            file_size: Some(image.file_size),
+            pe_timestamp: Some(u64::from(image.timestamp)),
+            image_size: Some(u64::from(image.size_of_image)),
             verified: Some(today.to_owned()),
             provenance: Provenance::Analysis,
         },
@@ -208,9 +208,9 @@ mod tests {
         let (build, patterns, report) =
             generate(&seed(), &image(), "DayZ_x64.exe", "abc", "2026-10-03");
 
-        assert_eq!(build.build.pe_timestamp.as_deref(), Some("0x6A72FC58"));
-        assert_eq!(build.build.image_size.as_deref(), Some("0x400"));
-        assert_eq!(build.build.file_size, 1234);
+        assert_eq!(build.build.pe_timestamp, Some(0x6A72_FC58));
+        assert_eq!(build.build.image_size, Some(0x400));
+        assert_eq!(build.build.file_size, Some(1234));
         assert_eq!(build.build.provenance, Provenance::Analysis);
         assert_eq!(build.offsets["framebase.rotation"].value, 8);
 

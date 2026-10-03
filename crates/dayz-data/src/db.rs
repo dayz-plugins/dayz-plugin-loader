@@ -59,6 +59,26 @@ pub fn sha256_file(path: &Path) -> io::Result<String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
+/// What identifies the running executable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Identity {
+    /// SHA-256 of the file, when it could be hashed.
+    pub sha256: Option<String>,
+    /// PE timestamp from the mapped headers.
+    pub pe_timestamp: u64,
+    /// `SizeOfImage` from the mapped headers.
+    pub image_size: u64,
+}
+
+/// Which key matched a build file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatchedBy {
+    /// The executable's SHA-256.
+    Hash,
+    /// The PE timestamp and image size pair.
+    PeHeaders,
+}
+
 /// A loaded database: the patterns plus every build file found.
 #[derive(Debug, Clone, Default)]
 pub struct Database {
@@ -135,11 +155,15 @@ impl Database {
     /// makes a user directory override the copy shipped with the loader.
     pub fn merge_under(&mut self, other: Database) {
         for build in other.builds {
-            if !self
-                .builds
-                .iter()
-                .any(|b| b.build.sha256 == build.build.sha256)
-            {
+            // Either key identifies the same build, so compare on whichever the entry has.
+            let same = self.builds.iter().any(|b| {
+                let hash = b.build.sha256.is_some() && b.build.sha256 == build.build.sha256;
+                let headers = b.build.pe_timestamp.is_some()
+                    && b.build.pe_timestamp == build.build.pe_timestamp
+                    && b.build.image_size == build.build.image_size;
+                hash || headers
+            });
+            if !same {
                 self.builds.push(build);
             }
         }
@@ -152,9 +176,32 @@ impl Database {
     /// The build file for an executable hash, compared case-insensitively.
     #[must_use]
     pub fn build_for(&self, sha256: &str) -> Option<&BuildFile> {
-        self.builds
-            .iter()
-            .find(|b| b.build.sha256.eq_ignore_ascii_case(sha256))
+        self.builds.iter().find(|b| {
+            b.build
+                .sha256
+                .as_ref()
+                .is_some_and(|h| h.eq_ignore_ascii_case(sha256))
+        })
+    }
+
+    /// The build file for a running executable.
+    ///
+    /// The hash is exact and wins. Falling back to the PE timestamp and image size lets an
+    /// entry exist for a build nobody here has the executable of: that pair is what both
+    /// predecessor projects gated their hooks on, so it identifies a build well enough to
+    /// use, and the caller reports which key matched.
+    #[must_use]
+    pub fn build_for_identity(&self, identity: &Identity) -> Option<(&BuildFile, MatchedBy)> {
+        if let Some(hash) = identity.sha256.as_deref() {
+            if let Some(found) = self.build_for(hash) {
+                return Some((found, MatchedBy::Hash));
+            }
+        }
+        let found = self.builds.iter().find(|b| {
+            b.build.pe_timestamp == Some(identity.pe_timestamp)
+                && b.build.image_size == Some(identity.image_size)
+        })?;
+        Some((found, MatchedBy::PeHeaders))
     }
 
     /// Builds whose file size matches but whose hash does not: the nearest misses, named in
@@ -163,7 +210,7 @@ impl Database {
     pub fn similar_builds(&self, file_size: u64) -> Vec<&str> {
         self.builds
             .iter()
-            .filter(|b| b.build.file_size == file_size)
+            .filter(|b| b.build.file_size == Some(file_size))
             .map(|b| b.build.version.as_str())
             .collect()
     }
@@ -222,6 +269,60 @@ mod tests {
             r#"{{"schema":{schema},"build":{{"version":"{version}","executable":"DayZ_x64.exe",
                "sha256":"{sha}","file_size":{size}}},"symbols":{{"a":{{"rva":"0x10"}}}}}}"#
         )
+    }
+
+    fn headers_json(version: &str, timestamp: &str, image: &str) -> String {
+        format!(
+            r#"{{"schema":1,"build":{{"version":"{version}","executable":"DayZ_x64.exe",
+               "pe_timestamp":"{timestamp}","image_size":"{image}","provenance":"external"}},
+               "symbols":{{"a":{{"rva":"0x10"}}}}}}"#
+        )
+    }
+
+    #[test]
+    fn a_build_without_a_hash_matches_on_the_pe_headers() {
+        let dir = TempDir::new("identity");
+        fs::write(
+            dir.0.join(BUILDS_DIR).join("hashed.json"),
+            build_json("1.29", "AABB", 17_851_448, 1),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        fs::write(
+            dir.0.join(BUILDS_DIR).join("external.json"),
+            headers_json("older", "0x6A47B9AA", "0x4407000"),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let db = Database::load(&dir.0);
+
+        let hashed = Identity {
+            sha256: Some("aabb".into()),
+            pe_timestamp: 0,
+            image_size: 0,
+        };
+        assert_eq!(
+            db.build_for_identity(&hashed)
+                .map(|(b, how)| (b.build.version.as_str(), how)),
+            Some(("1.29", MatchedBy::Hash))
+        );
+
+        // No hash for this one, so the header pair is the only way to find it.
+        let external = Identity {
+            sha256: Some("ffff".into()),
+            pe_timestamp: 0x6A47_B9AA,
+            image_size: 0x0440_7000,
+        };
+        assert_eq!(
+            db.build_for_identity(&external)
+                .map(|(b, how)| (b.build.version.as_str(), how)),
+            Some(("older", MatchedBy::PeHeaders))
+        );
+
+        // A matching timestamp with the wrong image size is a different build.
+        let mismatched = Identity {
+            image_size: 1,
+            ..external.clone()
+        };
+        assert_eq!(db.build_for_identity(&mismatched), None);
     }
 
     #[test]
@@ -321,8 +422,8 @@ mod tests {
             build: BuildInfo {
                 version: "1.30.0".into(),
                 executable: "DayZ_x64.exe".into(),
-                sha256: "ff".into(),
-                file_size: 5,
+                sha256: Some("ff".into()),
+                file_size: Some(5),
                 pe_timestamp: None,
                 image_size: None,
                 verified: None,

@@ -20,6 +20,10 @@ pub enum Provenance {
     /// a guess until someone confirms it, and the loader says so in the log.
     #[default]
     Scan,
+    /// Taken from another project's table. Nobody here has run it, and without the
+    /// executable there are no byte checks to catch a wrong entry, so the loader names the
+    /// provenance in the log when it uses one.
+    External,
 }
 
 /// What kind of thing a symbol names.
@@ -43,16 +47,28 @@ pub struct BuildInfo {
     pub version: String,
     /// Executable the hash belongs to.
     pub executable: String,
-    /// SHA-256 of that executable, lower case hexadecimal. The primary key.
-    pub sha256: String,
-    /// Size of the executable in bytes. Cheap to check before hashing.
-    pub file_size: u64,
-    /// PE timestamp, for humans comparing builds.
+    /// SHA-256 of that executable, lower case hexadecimal. The primary key, and absent only
+    /// for an entry contributed without the executable to hash.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pe_timestamp: Option<String>,
-    /// Size of the mapped image, for humans.
+    pub sha256: Option<String>,
+    /// Size of the executable in bytes, when known. Cheap to check before hashing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub image_size: Option<String>,
+    pub file_size: Option<u64>,
+    /// PE timestamp. The secondary key: together with [`BuildInfo::image_size`] it identifies
+    /// a build well enough that both predecessor projects gated their hooks on the pair.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::hex::option"
+    )]
+    pub pe_timestamp: Option<u64>,
+    /// Size of the mapped image, the other half of the secondary key.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::hex::option"
+    )]
+    pub image_size: Option<u64>,
     /// Date the entry was last confirmed, `YYYY-MM-DD`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verified: Option<String>,

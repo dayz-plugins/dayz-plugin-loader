@@ -21,7 +21,7 @@ mod resolve;
 mod schema;
 mod table;
 
-pub use db::{sha256_file, Database, DatabaseError};
+pub use db::{sha256_file, Database, DatabaseError, Identity, MatchedBy};
 pub use pattern::{Pattern, PatternError};
 pub use resolve::{Resolve, ResolveError};
 pub use schema::{

@@ -281,8 +281,8 @@ mod tests {
             build: BuildInfo {
                 version: "test".into(),
                 executable: "DayZ_x64.exe".into(),
-                sha256: "abc".into(),
-                file_size: 1,
+                sha256: Some("abc".into()),
+                file_size: Some(1),
                 pe_timestamp: None,
                 image_size: None,
                 verified: None,

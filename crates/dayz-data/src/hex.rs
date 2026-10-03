@@ -37,6 +37,28 @@ pub(crate) fn serialize<S: Serializer>(value: &u64, s: S) -> Result<S::Ok, S::Er
     s.serialize_str(&format!("{value:#X}").replace("0X", "0x"))
 }
 
+/// The same mapping for an optional field.
+pub(crate) mod option {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    /// Deserialize `Option<u64>` from a hexadecimal string, a number, or null.
+    pub(crate) fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error> {
+        #[derive(Deserialize)]
+        struct Wrapper(#[serde(with = "super")] u64);
+        Ok(Option::<Wrapper>::deserialize(d)?.map(|w| w.0))
+    }
+
+    /// Serialize `Option<u64>` as a hexadecimal string, or null.
+    // The reference is not a choice: `serde(with = ...)` requires exactly this signature.
+    #[allow(clippy::ref_option)]
+    pub(crate) fn serialize<S: Serializer>(value: &Option<u64>, s: S) -> Result<S::Ok, S::Error> {
+        match value {
+            Some(v) => super::serialize(v, s),
+            None => s.serialize_none(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde::Serialize;

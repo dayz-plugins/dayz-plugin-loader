@@ -10,7 +10,7 @@
 use std::path::Path;
 use std::sync::OnceLock;
 
-use dayz_data::{Database, Origin, Provenance, SymbolTable};
+use dayz_data::{Database, Identity, MatchedBy, Origin, Provenance, SymbolTable};
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::ProcessStatus::{GetModuleInformation, MODULEINFO};
@@ -75,20 +75,40 @@ pub(crate) fn initialize(data_dir: &Path, exe: &Path) {
     // only read, and never handed out beyond this function.
     let image = unsafe { core::slice::from_raw_parts(module.0.cast::<u8>(), size) };
 
-    let hash = dayz_data::sha256_file(exe).unwrap_or_else(|e| {
-        log::warn!("dayz-data: cannot hash {}: {e}", exe.display());
-        String::new()
-    });
-    let build = db.build_for(&hash);
-    if let Some(found) = build {
+    let hash = dayz_data::sha256_file(exe)
+        .inspect_err(|e| log::warn!("dayz-data: cannot hash {}: {e}", exe.display()))
+        .ok();
+    let identity = Identity {
+        sha256: hash.clone(),
+        pe_timestamp: pe_timestamp(image),
+        image_size: size as u64,
+    };
+    let matched = db.build_for_identity(&identity);
+    let build = matched.map(|(file, _)| file);
+    if let Some((found, how)) = matched {
+        let key = match how {
+            MatchedBy::Hash => "hash",
+            MatchedBy::PeHeaders => "pe timestamp and image size",
+        };
         log::info!(
-            "dayz-data: build {} ({:?}), {} cached symbols",
+            "dayz-data: build {} ({:?}), matched by {key}, {} cached symbols",
             found.build.version,
             found.build.provenance,
             found.symbols.len()
         );
+        if found.build.provenance == Provenance::External {
+            log::warn!(
+                "dayz-data: build {} comes from another project and has no byte checks, so a \
+                 wrong address cannot be caught here",
+                found.build.version
+            );
+        }
     } else {
-        log::warn!("dayz-data: unknown build, sha256 {hash}; falling back to pattern scanning");
+        log::warn!(
+            "dayz-data: unknown build (sha256 {}, pe {:#X}, image {size:#X}); scanning patterns",
+            hash.as_deref().unwrap_or("unavailable"),
+            identity.pe_timestamp
+        );
         let size = std::fs::metadata(exe).map(|m| m.len()).unwrap_or_default();
         let similar = db.similar_builds(size);
         if !similar.is_empty() {
@@ -99,7 +119,9 @@ pub(crate) fn initialize(data_dir: &Path, exe: &Path) {
     let table = SymbolTable::resolve(image, build, &db.patterns);
     report(&table);
     if build.is_none() {
-        write_candidate(data_dir, exe, &hash, &table);
+        if let Some(hash) = hash.as_deref() {
+            write_candidate(data_dir, exe, hash, &table);
+        }
     }
     let resolved = Resolved {
         module_base: module.0,
@@ -109,6 +131,25 @@ pub(crate) fn initialize(data_dir: &Path, exe: &Path) {
     if RESOLVED.set(resolved).is_err() {
         log::error!("dayz-data: resolved twice");
     }
+}
+
+/// PE timestamp from the mapped headers. Zero when they do not look like a PE image.
+///
+/// Read from memory rather than the file: the headers are mapped at the image base, and this
+/// is the identity both predecessor projects gated their hooks on.
+fn pe_timestamp(image: &[u8]) -> u64 {
+    let read_u32 = |at: usize| -> Option<u32> {
+        let bytes: [u8; 4] = image.get(at..at + 4)?.try_into().ok()?;
+        Some(u32::from_le_bytes(bytes))
+    };
+    let Some(nt) = read_u32(0x3C).map(|o| o as usize) else {
+        return 0;
+    };
+    if image.get(nt..nt + 4) != Some(b"PE\0\0") {
+        return 0;
+    }
+    // COFF file header: signature (4) + machine (2) + sections (2), then TimeDateStamp.
+    read_u32(nt + 8).map_or(0, u64::from)
 }
 
 /// Log one line per symbol, so a game update is diagnosable from the log alone.
@@ -138,7 +179,7 @@ fn report(table: &SymbolTable) {
 /// Write what scanning found for an unknown build, so the next launch starts from a cache and
 /// the file can be reviewed and contributed upstream.
 fn write_candidate(data_dir: &Path, exe: &Path, hash: &str, table: &SymbolTable) {
-    if hash.is_empty() || table.symbols().count() == 0 {
+    if table.symbols().count() == 0 {
         return;
     }
     let file = dayz_data::BuildFile {
@@ -151,8 +192,8 @@ fn write_candidate(data_dir: &Path, exe: &Path, hash: &str, table: &SymbolTable)
                 || "DayZ_x64.exe".to_owned(),
                 |n| n.to_string_lossy().into_owned(),
             ),
-            sha256: hash.to_owned(),
-            file_size: std::fs::metadata(exe).map(|m| m.len()).unwrap_or_default(),
+            sha256: Some(hash.to_owned()),
+            file_size: std::fs::metadata(exe).map(|m| m.len()).ok(),
             pe_timestamp: None,
             image_size: None,
             verified: None,
