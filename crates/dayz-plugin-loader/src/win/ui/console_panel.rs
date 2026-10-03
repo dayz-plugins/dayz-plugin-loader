@@ -7,6 +7,8 @@
 
 use egui::{Context, Key, RichText, ScrollArea, TextEdit};
 
+use super::chrome::{self, Chrome, Placed};
+
 /// How many console lines the panel shows. The buffer behind it is bounded anyway.
 const VISIBLE_LINES: usize = 400;
 
@@ -34,50 +36,47 @@ impl ConsolePanel {
         &mut self,
         ctx: &Context,
         lines: &[String],
-        open: &mut bool,
-    ) -> Option<String> {
+        chrome: &Chrome<'_>,
+    ) -> (Option<String>, Placed) {
         let mut submitted = None;
-        egui::Window::new("DayZ plugin loader")
-            .default_size([640.0, 360.0])
-            .open(open)
-            .show(ctx, |ui| {
-                let rows = lines.len().min(VISIBLE_LINES);
-                ScrollArea::vertical()
-                    .stick_to_bottom(true)
-                    .auto_shrink([false, false])
-                    .max_height(ui.available_height() - 32.0)
-                    .show(ui, |ui| {
-                        for line in lines.iter().skip(lines.len() - rows) {
-                            ui.label(RichText::new(line).monospace());
-                        }
-                    });
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(">").monospace());
-                    let response = ui.add(
-                        TextEdit::singleline(&mut self.input)
-                            .font(egui::TextStyle::Monospace)
-                            .hint_text("type `help`")
-                            .desired_width(ui.available_width()),
-                    );
-                    if self.focus {
-                        response.request_focus();
-                        self.focus = false;
-                    }
-                    if response.has_focus() {
-                        self.recall_history(ui.ctx());
-                    }
-                    // Checked against the box having focus rather than losing it: egui only
-                    // reports `lost_focus` when it processes the Enter itself, which it does
-                    // not on the frame focus was just requested back, and a console that
-                    // silently eats every other command is worse than useless.
-                    if response.has_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
-                        submitted = self.submit();
-                        self.focus = true;
+        let placed = chrome::show(ctx, chrome, |ui| {
+            let rows = lines.len().min(VISIBLE_LINES);
+            ScrollArea::vertical()
+                .stick_to_bottom(true)
+                .auto_shrink([false, false])
+                .max_height(ui.available_height() - 32.0)
+                .show(ui, |ui| {
+                    for line in lines.iter().skip(lines.len() - rows) {
+                        ui.label(RichText::new(line).monospace());
                     }
                 });
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(">").monospace());
+                let response = ui.add(
+                    TextEdit::singleline(&mut self.input)
+                        .font(egui::TextStyle::Monospace)
+                        .hint_text("type `help`")
+                        .desired_width(ui.available_width()),
+                );
+                if self.focus {
+                    response.request_focus();
+                    self.focus = false;
+                }
+                if response.has_focus() {
+                    self.recall_history(ui.ctx());
+                }
+                // Checked against the box having focus rather than losing it: egui only
+                // reports `lost_focus` when it processes the Enter itself, which it does
+                // not on the frame focus was just requested back, and a console that
+                // silently eats every other command is worse than useless.
+                if response.has_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                    submitted = self.submit();
+                    self.focus = true;
+                }
             });
-        submitted
+        });
+        (submitted, placed)
     }
 
     /// Walk the submitted-line history with the arrow keys.

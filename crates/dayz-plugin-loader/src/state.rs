@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use dayz_plugin_api::{PluginHandle, Status};
-use dayz_plugin_core::{hotkeys, keys, names, settings, store};
+use dayz_plugin_core::{hotkeys, keys, names, settings, store, windows};
 
 use crate::config::{LoaderConfig, Paths};
 
@@ -147,6 +147,8 @@ pub struct State {
     /// Produces the lines the `read` command prints, for the same reason as the two above:
     /// reading the game's memory is the platform layer's business.
     pub read_lines: fn(&str, Option<usize>) -> Vec<String>,
+    /// Where the overlay's windows were left, and whether advanced settings are shown.
+    pub windows: windows::Layout,
 }
 
 /// Default for [`State::symbol_lines`]: no database, nothing to print.
@@ -172,7 +174,13 @@ impl State {
             log::warn!("ignoring hotkey overrides: {e}");
             BTreeMap::new()
         });
+        let windows =
+            windows::Layout::from_store(&store::read(&paths.windows_file()).unwrap_or_else(|e| {
+                log::warn!("ignoring window layout: {e}");
+                BTreeMap::new()
+            }));
         State {
+            windows,
             paths,
             config,
             plugins: Vec::new(),
@@ -586,6 +594,20 @@ impl State {
         sections
     }
 
+    /// Write the window layout back to `windows.toml` if anything moved.
+    ///
+    /// Called when the user lets go of the mouse rather than every frame: a window being
+    /// dragged changes position sixty times a second and none of those are worth a file.
+    pub fn save_windows(&mut self) {
+        if !self.windows.take_dirty() {
+            return;
+        }
+        let path = self.paths.windows_file();
+        if let Err(e) = store::write(&path, &self.windows.to_store()) {
+            log::error!("could not save the window layout: {e}");
+        }
+    }
+
     /// Change one binding and remember it in `hotkeys.toml`.
     ///
     /// Returns whether the action exists. A binding equal to the default is removed from the
@@ -694,6 +716,7 @@ pub(crate) mod tests {
             max: 10.0,
             choices: Vec::new(),
             restart_required: false,
+            advanced: false,
             transient: false,
         }
     }

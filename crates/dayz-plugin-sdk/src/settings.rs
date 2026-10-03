@@ -27,6 +27,7 @@ pub struct Setting {
     pub(crate) max: f64,
     pub(crate) choices: Vec<String>,
     pub(crate) restart_required: bool,
+    pub(crate) advanced: bool,
     pub(crate) transient: bool,
 }
 
@@ -42,6 +43,7 @@ impl Setting {
             max: 0.0,
             choices: Vec::new(),
             restart_required: false,
+            advanced: false,
             transient: false,
         }
     }
@@ -108,6 +110,17 @@ impl Setting {
     #[must_use]
     pub fn transient(mut self) -> Self {
         self.transient = true;
+        self
+    }
+
+    /// Hide the setting from the settings editor unless the user asks for advanced settings.
+    ///
+    /// For the ones that exist in case something ever needs changing — a port, a timeout, a
+    /// diagnostic switch — so the editor shows what a user came for. The setting is otherwise
+    /// completely normal: still listed by `list`, still readable and writable.
+    #[must_use]
+    pub fn advanced(mut self) -> Self {
+        self.advanced = true;
         self
     }
 }

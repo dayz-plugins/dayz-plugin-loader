@@ -13,6 +13,9 @@ use dayz_plugin_core::settings::{Desc, Kind};
 
 use crate::win::{dispatch, state};
 
+/// Widest integer range that still makes sense as a slider; above it, a number field.
+const SLIDER_STEPS: f64 = 1000.0;
+
 thread_local! {
     /// The panel body currently being filled on this thread, if any.
     static CURRENT: Cell<(u64, *mut egui::Ui)> = const { Cell::new((0, core::ptr::null_mut())) };
@@ -127,7 +130,7 @@ fn setting(ui: &mut egui::Ui, caller: PluginHandle, name: &str) -> Status {
     } else {
         desc.title.clone()
     };
-    let changed = control(ui, &desc, &label, &current);
+    let changed = row(ui, &desc, &label, &current);
     if !desc.description.is_empty() {
         ui.label(egui::RichText::new(&desc.description).weak().small());
     }
@@ -146,6 +149,38 @@ fn setting(ui: &mut egui::Ui, caller: PluginHandle, name: &str) -> Status {
             log::debug!("ui: {name} = {new_value}: {message}");
             status
         }
+    }
+}
+
+/// One setting as the user meets it: its control, and a reset beside it once the value is no
+/// longer the default.
+///
+/// The reset is offered rather than always present, because a row for a setting nobody has
+/// touched has nothing to reset to.
+pub(super) fn row(ui: &mut egui::Ui, desc: &Desc, label: &str, current: &str) -> Option<String> {
+    ui.push_id(&desc.key, |ui| {
+        ui.horizontal(|ui| {
+            let changed = control(ui, desc, label, current);
+            if current == desc.default {
+                return changed;
+            }
+            let hint = format!("Reset to {}", describe_default(desc));
+            if ui.small_button("⟲").on_hover_text(hint).clicked() {
+                return Some(desc.default.clone());
+            }
+            changed
+        })
+        .inner
+    })
+    .inner
+}
+
+/// The default as a tooltip says it, so an empty string does not read as a missing word.
+fn describe_default(desc: &Desc) -> String {
+    if desc.default.is_empty() {
+        "nothing".to_owned()
+    } else {
+        format!("{:?}", desc.default)
     }
 }
 
@@ -168,13 +203,20 @@ pub(super) fn control(
         }
         Kind::Int => {
             let mut v = current.parse::<i64>().unwrap_or_default();
-            let response = if desc.min < desc.max {
-                #[allow(clippy::cast_possible_truncation)]
-                let range = (desc.min as i64)..=(desc.max as i64);
+            #[allow(clippy::cast_possible_truncation)]
+            let range = (desc.min as i64)..=(desc.max as i64);
+            // A slider is only a control when its travel means something. A port is a number
+            // in 1024..=65535: sixty thousand values across eighty pixels is not a choice a
+            // person can make, so a bounded range that wide gets a field that still clamps.
+            let response = if desc.min < desc.max && desc.max - desc.min <= SLIDER_STEPS {
                 ui.add(egui::Slider::new(&mut v, range).text(label))
             } else {
                 ui.horizontal(|ui| {
-                    let r = ui.add(egui::DragValue::new(&mut v));
+                    let mut drag = egui::DragValue::new(&mut v);
+                    if desc.min < desc.max {
+                        drag = drag.range(range);
+                    }
+                    let r = ui.add(drag);
                     ui.label(label);
                     r
                 })

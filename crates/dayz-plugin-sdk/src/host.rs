@@ -212,6 +212,9 @@ impl Host {
         if setting.transient {
             flags |= SettingFlags::TRANSIENT.0;
         }
+        if setting.advanced {
+            flags |= SettingFlags::ADVANCED.0;
+        }
         let desc = SettingDesc {
             struct_size: core::mem::size_of::<SettingDesc>(),
             key: Str::new(&setting.key),

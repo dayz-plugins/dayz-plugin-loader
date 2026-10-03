@@ -24,6 +24,14 @@ impl Plugin for Hello {
             "Hello from the plugin loader",
         ))?;
         host.setting(&Setting::bool("log_frames", "Log every 600th frame", false))?;
+        // Advanced: a knob that exists in case it ever needs changing, which the settings
+        // editor hides until the user asks for advanced settings. Everything else about it is
+        // ordinary — `list`, `get` and `set` do not know the difference.
+        host.setting(
+            &Setting::int("log_every", "Frames between log lines", 600, 1, 100_000)
+                .with_description("How often `log_frames` writes a line.")
+                .advanced(),
+        )?;
         host.hotkey("greet", "Print the greeting", "f9")?;
         host.command(
             "greet",
@@ -41,7 +49,8 @@ impl Plugin for Hello {
 
     fn on_present(&self, host: &Host, _info: &PresentInfo) {
         let n = self.frames.fetch_add(1, Ordering::Relaxed) + 1;
-        if n % 600 == 0 && host.get_as::<bool>("log_frames").unwrap_or(false) {
+        let every = host.get_as::<u64>("log_every").unwrap_or(600).max(1);
+        if n % every == 0 && host.get_as::<bool>("log_frames").unwrap_or(false) {
             log::info!("{n} frames presented");
         }
     }

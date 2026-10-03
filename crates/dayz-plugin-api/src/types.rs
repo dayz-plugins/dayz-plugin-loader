@@ -204,6 +204,11 @@ impl SettingFlags {
     pub const RESTART_REQUIRED: SettingFlags = SettingFlags(1);
     /// Runtime variable only: never written to the plugin's config file.
     pub const TRANSIENT: SettingFlags = SettingFlags(2);
+    /// Hidden from the settings editor until the user turns advanced settings on.
+    ///
+    /// A new flag rather than a new field, so a plugin built against this header still loads
+    /// in an older loader: the bit is simply ignored there and the setting stays visible.
+    pub const ADVANCED: SettingFlags = SettingFlags(4);
 }
 
 /// A setting (also a console variable) a plugin registers during start.

@@ -186,6 +186,7 @@ unsafe extern "C" fn setting_register(
             .map(str::to_owned)
             .collect(),
         restart_required: d.flags.0 & SettingFlags::RESTART_REQUIRED.0 != 0,
+        advanced: d.flags.0 & SettingFlags::ADVANCED.0 != 0,
         transient: d.flags.0 & SettingFlags::TRANSIENT.0 != 0,
     };
     state()

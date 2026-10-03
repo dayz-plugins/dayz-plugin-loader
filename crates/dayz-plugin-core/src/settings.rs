@@ -40,6 +40,12 @@ pub struct Desc {
     pub choices: Vec<String>,
     /// Takes effect after restart only.
     pub restart_required: bool,
+    /// Hidden from the settings editor until the user asks for advanced settings.
+    ///
+    /// For the knobs that exist because something might need changing once — a port, a
+    /// timeout, a diagnostic switch — rather than the ones a user came to the editor for.
+    /// Nothing else treats them differently: they are listed, read and written as usual.
+    pub advanced: bool,
     /// Never persisted.
     pub transient: bool,
 }
@@ -266,6 +272,7 @@ mod tests {
             max: 0.0,
             choices: Vec::new(),
             restart_required: false,
+            advanced: false,
             transient: false,
         }
     }

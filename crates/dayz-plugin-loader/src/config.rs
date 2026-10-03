@@ -21,7 +21,8 @@ pub struct Paths {
     /// into, so it sits where they can find it, while everything the loader owns stays out
     /// of the game directory's way.
     pub plugins_dir: PathBuf,
-    /// `<game>/plugin-loader/config`: `loader.toml`, `hotkeys.toml`, `<plugin>.toml`.
+    /// `<game>/plugin-loader/config`: `loader.toml`, `hotkeys.toml`, `windows.toml`,
+    /// `<plugin>.toml`.
     pub config_dir: PathBuf,
     /// `<game>/plugin-loader/logs`.
     pub logs_dir: PathBuf,
@@ -53,6 +54,12 @@ impl Paths {
     #[must_use]
     pub fn hotkeys_file(&self) -> PathBuf {
         self.config_dir.join("hotkeys.toml")
+    }
+
+    /// Where the overlay's windows were left, and the editor's own preferences.
+    #[must_use]
+    pub fn windows_file(&self) -> PathBuf {
+        self.config_dir.join("windows.toml")
     }
 }
 
@@ -132,6 +139,10 @@ mod tests {
         assert_eq!(
             p.hotkeys_file(),
             Path::new("/g/plugin-loader/config/hotkeys.toml")
+        );
+        assert_eq!(
+            p.windows_file(),
+            Path::new("/g/plugin-loader/config/windows.toml")
         );
     }
 

@@ -10,6 +10,7 @@
 //! this way it is structurally impossible to touch it from anywhere else. The only state
 //! shared with other threads is the handful of atomics below and the loader's own state.
 
+mod chrome;
 mod console_panel;
 mod frame;
 mod overlays;
@@ -23,6 +24,7 @@ use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Instant;
 
+use dayz_plugin_core::windows::Geometry;
 use egui::{Context, Pos2, Rect, Vec2};
 use windows::Win32::Graphics::Direct3D11::ID3D11Device;
 
@@ -193,7 +195,10 @@ impl Overlay {
             Rect::from_min_size(Pos2::ZERO, Vec2::new(width, height)),
             self.started.elapsed().as_secs_f64(),
         );
-        let (output, submitted, closed) = self.build(input);
+        let frame = self.build(input);
+        let Some(output) = frame.output else {
+            return Ok(());
+        };
 
         let (renderer_output, _platform, _viewports) = egui_directx11::split_output(output);
         let saved = render::save(&device_context);
@@ -204,8 +209,8 @@ impl Overlay {
         result?;
 
         // After the frame, so nothing below runs while a panel body is on the stack.
-        apply(&closed);
-        if let Some(line) = submitted {
+        apply(&frame.closed);
+        if let Some(line) = frame.submitted {
             super::run_console_line(None, &line);
         }
         Ok(())
@@ -221,14 +226,7 @@ impl Overlay {
     }
 
     /// Run the egui pass: the console, every open panel, and the overlay's own cursor.
-    fn build(
-        &mut self,
-        input: egui::RawInput,
-    ) -> (
-        egui::FullOutput,
-        Option<String>,
-        Vec<(dayz_plugin_api::PluginHandle, String)>,
-    ) {
+    fn build(&mut self, input: egui::RawInput) -> Frame {
         let panels = state().panel_list();
         let scrollback = console_lines();
         let ctx = self.ctx.clone();
@@ -239,25 +237,30 @@ impl Overlay {
         if just_opened {
             console.opened();
         }
-        let mut submitted = None;
-        let mut closed = Vec::new();
+        let mut frame = Frame::default();
         let queued = overlays::snapshot();
         let editor_open = EDITOR_OPEN.load(Ordering::Relaxed);
-        let sections = if editor_open {
-            state().editor_snapshot()
-        } else {
-            Vec::new()
-        };
+        let saved = Saved::of(&panels, editor_open);
+        let (sections, advanced) = (&saved.sections, saved.advanced);
+        let geometry_of = |id: &str| saved.geometry_of(id);
         let pressed = editor_open.then(wnd::take_last_key).flatten();
         let editor = &mut self.editor;
+        let mut placements: Vec<(String, Geometry)> = Vec::new();
         let mut edits = settings_panel::Edits::default();
         let mut painted = paint::Outcome::default();
         let output = ctx.run_ui(input, |ui| {
             let ctx = ui.ctx().clone();
-            let mut console_open = CONSOLE_OPEN.load(Ordering::Relaxed);
-            if console_open {
-                submitted = console.show(&ctx, &scrollback, &mut console_open);
-                if !console_open {
+            if CONSOLE_OPEN.load(Ordering::Relaxed) {
+                let chrome = chrome::Chrome {
+                    id: "loader.console",
+                    title: "DayZ plugin loader",
+                    default_size: [640.0, 360.0],
+                    saved: geometry_of("loader.console"),
+                };
+                let (submitted, placed) = console.show(&ctx, &scrollback, &chrome);
+                frame.submitted = submitted;
+                place(&mut placements, chrome.id, &placed);
+                if !placed.open {
                     CONSOLE_OPEN.store(false, Ordering::Relaxed);
                 }
             }
@@ -265,23 +268,38 @@ impl Overlay {
                 if !*open {
                     continue;
                 }
-                let mut keep = true;
                 let qualified = format!("{plugin}.{panel}");
-                egui::Window::new(title)
-                    .id(egui::Id::new(&qualified))
-                    .open(&mut keep)
-                    .show(&ctx, |ui| {
-                        let token = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed) as u64;
-                        frame::with(token, ui, || dispatch::ui(*handle, &qualified, token));
-                    });
-                if !keep {
-                    closed.push((*handle, panel.clone()));
+                let chrome = chrome::Chrome {
+                    id: &qualified,
+                    title,
+                    default_size: [320.0, 240.0],
+                    saved: geometry_of(&qualified),
+                };
+                let placed = chrome::show(&ctx, &chrome, |ui| {
+                    let token = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed) as u64;
+                    frame::with(token, ui, || dispatch::ui(*handle, &qualified, token));
+                });
+                place(&mut placements, &qualified, &placed);
+                if !placed.open {
+                    frame.closed.push((*handle, panel.clone()));
                 }
             }
             if editor_open {
-                let mut keep = true;
-                edits = editor.show(&ctx, &sections, pressed, &mut keep);
-                if !keep {
+                let chrome = chrome::Chrome {
+                    id: "loader.settings",
+                    title: "Loader settings",
+                    default_size: [560.0, 420.0],
+                    saved: geometry_of("loader.settings"),
+                };
+                let view = settings_panel::View {
+                    sections,
+                    pressed,
+                    advanced,
+                };
+                let (made, placed) = editor.show(&ctx, &view, &chrome);
+                edits = made;
+                place(&mut placements, chrome.id, &placed);
+                if !placed.open {
                     EDITOR_OPEN.store(false, Ordering::Relaxed);
                 }
             }
@@ -290,7 +308,89 @@ impl Overlay {
         });
         resolve(&painted);
         apply_edits(&edits);
-        (output, submitted, closed)
+        remember(&placements, ctx.input(|i| i.pointer.any_down()));
+        frame.output = Some(output);
+        frame
+    }
+}
+
+/// What the loader state held when the frame began.
+///
+/// Read once, before the pass: every window needs something out of the state, and the lock is
+/// never held while a panel body — which calls into a plugin — is on the stack.
+struct Saved {
+    /// Remembered geometry per window id, in the order the windows are drawn.
+    geometry: Vec<(String, Option<Geometry>)>,
+    /// The settings editor's snapshot, empty when it is closed.
+    sections: Vec<crate::state::EditorSection>,
+    /// Whether advanced settings are shown.
+    advanced: bool,
+}
+
+impl Saved {
+    fn of(
+        panels: &[(dayz_plugin_api::PluginHandle, String, String, String, bool)],
+        editor_open: bool,
+    ) -> Self {
+        let guard = state();
+        let ids = ["loader.console".to_owned(), "loader.settings".to_owned()]
+            .into_iter()
+            .chain(
+                panels
+                    .iter()
+                    .map(|(_, plugin, panel, _, _)| format!("{plugin}.{panel}")),
+            );
+        Saved {
+            geometry: ids
+                .map(|id| (guard.windows.get(&id), id))
+                .map(|(g, id)| (id, g))
+                .collect(),
+            sections: if editor_open {
+                guard.editor_snapshot()
+            } else {
+                Vec::new()
+            },
+            advanced: guard.windows.advanced(),
+        }
+    }
+
+    fn geometry_of(&self, id: &str) -> Option<Geometry> {
+        self.geometry
+            .iter()
+            .find(|(saved_id, _)| saved_id == id)
+            .and_then(|(_, geometry)| *geometry)
+    }
+}
+
+/// What one egui pass produced, for the caller to act on after it has ended.
+#[derive(Default)]
+struct Frame {
+    /// The pass itself, for the renderer.
+    output: Option<egui::FullOutput>,
+    /// A console line the user submitted.
+    submitted: Option<String>,
+    /// Panels the user closed, as `(owner, panel)`.
+    closed: Vec<(dayz_plugin_api::PluginHandle, String)>,
+}
+
+/// Note where a window ended up, when it had a rectangle this frame.
+fn place(into: &mut Vec<(String, Geometry)>, id: &str, placed: &chrome::Placed) {
+    if let Some(geometry) = placed.geometry {
+        into.push((id.to_owned(), geometry));
+    }
+}
+
+/// Hand the frame's window positions to the layout, and save it once the mouse is let go.
+///
+/// Waiting for the button is what keeps a drag from writing the file sixty times a second;
+/// it is also the moment a person has decided where the window goes.
+fn remember(placements: &[(String, Geometry)], pointer_down: bool) {
+    let mut guard = state();
+    for (id, geometry) in placements {
+        guard.windows.remember(id, *geometry);
+    }
+    if !pointer_down {
+        guard.save_windows();
     }
 }
 
@@ -308,6 +408,11 @@ fn apply_edits(edits: &settings_panel::Edits) {
             }
             Err((_, message)) => log::warn!("editor could not set {name}: {message}"),
         }
+    }
+    if let Some(advanced) = edits.advanced {
+        let mut guard = state();
+        guard.windows.set_advanced(advanced);
+        guard.save_windows();
     }
     for (action, chord) in &edits.bindings {
         let binding = chord.map_or_else(|| "none".to_owned(), |c| c.to_string());

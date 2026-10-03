@@ -90,6 +90,7 @@ DayZ/
 └── plugin-loader/
     ├── config/loader.toml          loader settings
     ├── config/hotkeys.toml         hotkey overrides
+    ├── config/windows.toml         where overlay windows were left, and their opacity
     ├── config/<plugin>.toml        one file per plugin, written by the loader
     ├── data/patterns.json          the dayz-data database
     ├── data/builds/*.json          one file per known game build
@@ -208,7 +209,24 @@ fn on_ui(&self, host: &Host, ui: &Ui, _panel: &str) {
 `ui.setting(key)` is the one worth knowing: the loader reads the descriptor, draws the control
 that fits the type, and writes a change back through the same path the console's `set` takes —
 validated, persisted and `on_setting_changed` fired. A settings panel needs no state in the
-plugin.
+plugin. Beside the control is a reset, offered once the value is no longer the default.
+
+Which control a setting gets follows from its descriptor: a bounded range narrow enough to aim
+at gets a slider, a wide one (a port is `1024..=65535`) gets a number field that still clamps,
+and a setting marked `.advanced()` stays out of the settings editor until the user ticks
+*Advanced settings*:
+
+```rust
+host.setting(
+    &Setting::int("port", "Debug port", 48621, 1024, 65535)
+        .with_description("Loopback TCP port dayz-ctl connects to.")
+        .restart_required()
+        .advanced(),
+)?;
+```
+
+Advanced is only about that one list: `list`, `get`, `set` and `ui.setting` treat the setting
+like any other.
 
 The loader owns the window chrome, the open and closed state, the layout and the hotkey that
 toggles the panel; the key never reaches `on_hotkey`. `host.set_panel_open` and
@@ -218,9 +236,30 @@ The widget token (`Ui`) is a number, not a pointer, and is only valid inside the
 that handed it over; keeping it gets a `WrongPhase`, not a dangling dereference. `on_ui` runs
 on the render thread between the game's last draw call and its `Present`, so it must be short.
 
+Every window that comes back has an id — `loader.console`, `loader.settings`, or
+`<plugin>.<panel>` — and the loader remembers it by that id: its position, its size and its
+opacity, in `windows.toml`, written when the mouse is let go rather than while a window is
+being dragged. The title bar carries an opacity slider next to the close button, so a panel
+that only needs watching can be faded over the game instead of covering it.
+
 The loader's own console is drawn through the same machinery. `--console` still opens a
-Windows console window; the key under Escape (`caret` by default, rebindable as
+Windows console window; the key under Escape (`sc29` by default, rebindable as
 `loader.console` in `hotkeys.toml`) opens the same console inside the game.
+
+### The settings editor
+
+`F11` (rebindable as `loader.settings`) opens one window holding every plugin's settings and
+hotkeys. A plugin gets it for free: it registered a setting because it needed the value and a
+hotkey because it needed the action, and neither costs it a line of UI.
+
+Each setting is drawn as the control its type calls for, with a reset once it differs from the
+default. Each hotkey has a recorder — click the binding, press the key — plus *Clear* and
+*Default*. A recorded key is stored by name when the grammar has one (`f10`) and by position
+otherwise (`sc29`), which is what makes the key under Escape bindable at all: under Wine it
+reports a virtual key no layout table claims.
+
+Everything the editor writes goes through the same calls the console makes, so a slider and a
+typed `set` cannot disagree, and `hotkeys.toml` ends up holding exactly the overrides.
 
 ### Answering for the console
 

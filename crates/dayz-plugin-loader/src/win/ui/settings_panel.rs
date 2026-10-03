@@ -13,6 +13,7 @@ use egui::{Context, Grid, RichText, ScrollArea};
 
 use crate::state::EditorSection;
 
+use super::chrome::{self, Chrome, Placed};
 use super::frame;
 
 /// What the editor remembers between frames.
@@ -22,6 +23,17 @@ pub(crate) struct SettingsPanel {
     recording: Option<String>,
 }
 
+/// Everything one frame of the editor is drawn from. A snapshot: the editor never touches
+/// loader state itself, because writing a setting calls into the owning plugin.
+pub(crate) struct View<'a> {
+    /// One section per plugin, plus the loader's own.
+    pub(crate) sections: &'a [EditorSection],
+    /// The key the window procedure saw, for the hotkey recorder.
+    pub(crate) pressed: Option<(u16, u16, Modifiers)>,
+    /// Whether settings marked advanced are shown.
+    pub(crate) advanced: bool,
+}
+
 /// What one frame of the editor decided, applied by the caller with no lock held.
 #[derive(Default)]
 pub(crate) struct Edits {
@@ -29,42 +41,57 @@ pub(crate) struct Edits {
     pub(crate) settings: Vec<(String, String)>,
     /// Action name and its new binding, `None` to unbind.
     pub(crate) bindings: Vec<(String, Option<Chord>)>,
+    /// Set when the user toggled advanced settings.
+    pub(crate) advanced: Option<bool>,
 }
 
 impl SettingsPanel {
-    /// Draw the window. `sections` is a snapshot; nothing here touches loader state.
+    /// Draw the window.
     pub(crate) fn show(
         &mut self,
         ctx: &Context,
-        sections: &[EditorSection],
-        pressed: Option<(u16, u16, Modifiers)>,
-        open: &mut bool,
-    ) -> Edits {
+        view: &View<'_>,
+        chrome: &Chrome<'_>,
+    ) -> (Edits, Placed) {
         let mut edits = Edits::default();
         // A key arriving while recording ends the recording, whichever window has focus.
-        if let (Some(action), Some((vk, scancode, modifiers))) = (self.recording.clone(), pressed) {
+        if let (Some(action), Some((vk, scancode, modifiers))) =
+            (self.recording.clone(), view.pressed)
+        {
             self.finish_recording(&action, vk, scancode, modifiers, &mut edits);
         }
-        egui::Window::new("Loader settings")
-            .default_size([560.0, 420.0])
-            .open(open)
-            .show(ctx, |ui| {
-                ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        for section in sections {
-                            self.section(ui, section, &mut edits);
-                        }
-                        if sections.is_empty() {
-                            ui.label("No plugin has registered a setting or a hotkey.");
-                        }
-                    });
-            });
-        edits
+        let placed = chrome::show(ctx, chrome, |ui| {
+            let mut advanced = view.advanced;
+            if ui
+                .checkbox(&mut advanced, "Advanced settings")
+                .on_hover_text("Show the settings plugins marked as rarely needed")
+                .changed()
+            {
+                edits.advanced = Some(advanced);
+            }
+            ui.separator();
+            ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    for section in view.sections {
+                        self.section(ui, section, view.advanced, &mut edits);
+                    }
+                    if view.sections.is_empty() {
+                        ui.label("No plugin has registered a setting or a hotkey.");
+                    }
+                });
+        });
+        (edits, placed)
     }
 
     /// One plugin: its settings, then its hotkeys.
-    fn section(&mut self, ui: &mut egui::Ui, section: &EditorSection, edits: &mut Edits) {
+    fn section(
+        &mut self,
+        ui: &mut egui::Ui,
+        section: &EditorSection,
+        advanced: bool,
+        edits: &mut Edits,
+    ) {
         let heading = if section.running {
             RichText::new(&section.plugin).heading()
         } else {
@@ -76,8 +103,13 @@ impl SettingsPanel {
             .id_salt(&section.plugin)
             .default_open(true)
             .show(ui, |ui| {
+                let mut hidden = 0_usize;
                 for (desc, value) in &section.settings {
-                    if let Some(new) = frame::control(ui, desc, &label_of(desc), value) {
+                    if desc.advanced && !advanced {
+                        hidden += 1;
+                        continue;
+                    }
+                    if let Some(new) = frame::row(ui, desc, &label_of(desc), value) {
                         edits
                             .settings
                             .push((format!("{}.{}", section.plugin, desc.key), new));
@@ -85,6 +117,14 @@ impl SettingsPanel {
                     if !desc.description.is_empty() {
                         ui.label(RichText::new(&desc.description).weak().small());
                     }
+                }
+                if hidden > 0 {
+                    let plural = if hidden == 1 { "setting" } else { "settings" };
+                    ui.label(
+                        RichText::new(format!("{hidden} advanced {plural} hidden"))
+                            .weak()
+                            .small(),
+                    );
                 }
                 if !section.settings.is_empty() && !section.hotkeys.is_empty() {
                     ui.separator();
