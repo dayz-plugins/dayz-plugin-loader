@@ -30,6 +30,7 @@ windows = { version = "0.62", features = [
     "Win32_Security",
     "Win32_Storage_FileSystem",
     "Win32_System_Console",
+    "Win32_System_Diagnostics_Debug",
     "Win32_System_LibraryLoader",
     "Win32_System_SystemServices",
     "Win32_System_Memory",
@@ -39,6 +40,18 @@ windows = { version = "0.62", features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+# Structured exception handling needs MSVC `__try`, which mingw's gcc does not implement, so
+# the hardware fault guard exists only on the MSVC target. That is the target the shipped DLL
+# uses; see `win::guard`.
+# Inline detours need the stolen prologue relocated, which needs a real x86-64 decoder.
+# `iced-x86` is one, in Rust. The obvious alternative, `retour`, pulls in libudis86 as C and
+# that does not cross-compile under clang-cl, so the trampoline itself is written here on top
+# of the decoder rather than taken from a crate; see `win::detour`.
+[target.'cfg(windows)'.dependencies.iced-x86]
+version = "1"
+default-features = false
+features = ["decoder", "instr_info", "std"]
 
 # Structured exception handling needs MSVC `__try`, which mingw's gcc does not implement, so
 # the hardware fault guard exists only on the MSVC target. That is the target the shipped DLL

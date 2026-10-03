@@ -7,6 +7,7 @@
 mod console;
 mod data;
 mod deps;
+mod detour;
 mod dispatch;
 mod exports;
 mod guard;
@@ -14,6 +15,7 @@ mod hooks;
 mod hostapi;
 mod input;
 mod lifecycle;
+mod plugin_hooks;
 mod plugins;
 mod vtable;
 
@@ -139,6 +141,7 @@ fn init() -> bool {
     let mut guard = state();
     guard.phase = Phase::Running;
     guard.symbol_lines = data::console_lines;
+    guard.hook_lines = plugin_hooks::console_lines;
     for entry in guard.hotkeys.iter() {
         let binding = entry
             .chord

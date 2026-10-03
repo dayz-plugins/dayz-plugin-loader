@@ -72,6 +72,16 @@ pub fn execute(state: &mut State, caller: Option<PluginHandle>, line: &str) -> O
             }
             Outcome::default()
         }
+        Line::Hooks => {
+            let mut lines = (state.hook_lines)();
+            if lines.is_empty() {
+                lines.push("no hooks installed".to_owned());
+            }
+            for line in lines {
+                state.console_print(line);
+            }
+            Outcome::default()
+        }
         Line::Get(name) | Line::Variable(name, None) => get(state, caller, &name),
         Line::Set(name, value) | Line::Variable(name, Some(value)) => {
             set(state, caller, &name, &value)
@@ -87,7 +97,7 @@ pub fn execute(state: &mut State, caller: Option<PluginHandle>, line: &str) -> O
 fn plugin_op(state: &mut State, op: PluginOp, name: Option<&str>) -> Outcome {
     match op {
         PluginOp::List => {
-            let lines: Vec<String> = state
+            let mut lines: Vec<String> = state
                 .plugins
                 .iter()
                 .map(|p| {
@@ -100,6 +110,12 @@ fn plugin_op(state: &mut State, op: PluginOp, name: Option<&str>) -> Outcome {
                     )
                 })
                 .collect();
+            lines.extend(
+                state
+                    .pending
+                    .iter()
+                    .map(|(name, reason)| format!("{name} waiting: {reason}")),
+            );
             for l in lines {
                 state.console_print(l);
             }

@@ -24,6 +24,25 @@ fn to_plugin(plugin: &Active, what: &str, body: impl FnOnce()) {
     }
 }
 
+/// Callback delivery was resumed or paused for one plugin.
+///
+/// Called with the plugin still in whichever state makes the callback honest: enabling tells
+/// it after the atomic is set, disabling tells it before the atomic is cleared, so in both
+/// cases the plugin is allowed to do its last or first piece of work from inside the call.
+pub(crate) fn enabled(plugin: &Active, on: bool) {
+    let (cb, what) = if on {
+        (plugin.callbacks.on_enable, "on_enable")
+    } else {
+        (plugin.callbacks.on_disable, "on_disable")
+    };
+    let Some(cb) = cb else { return };
+    let ctx = plugin.callbacks.ctx;
+    // SAFETY: `ctx` is the plugin's own context; the callback takes nothing else.
+    if let Err(fault) = unsafe { super::guard::call(|| cb(ctx)) } {
+        plugin.disable(&format!("{what} {fault}"));
+    }
+}
+
 /// The game's swapchain was created or recreated.
 pub(crate) fn swapchain(info: &api::SwapchainInfo) {
     for &plugin in plugins::active() {

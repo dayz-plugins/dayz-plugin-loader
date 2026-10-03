@@ -62,7 +62,22 @@ Things that look like style choices but are load-bearing:
   otherwise.
 - **Loading is two passes:** describe every DLL, then let the declared dependencies decide who
   starts and in what order (`dayz_plugin_core::deps` for the graph, `win/deps.rs` for the
-  libraries, files and symbols). A rejection is a log line, never an aborted launch.
+  libraries, files and symbols). A rejection is a log line, never an aborted launch, and a
+  plugin waiting for another plugin stays described in `plugins::PENDING` so it can start
+  later; anything that cannot change within a launch is refused instead of parked.
+- **A DLL is only loaded if its bytes contain `dayz_plugin_describe`.** `plugins/` is in the
+  game folder and collects other people's DLLs; `LoadLibrary` on one of those would run its
+  `DllMain`. The export name check costs a file read and avoids that entirely.
+- **Hooks plugins install go through `win/plugin_hooks.rs`.** The loader holds the original
+  bytes, vtable pointer or stolen prologue and restores them when the plugin stops, faults or
+  the game exits. `win/detour.rs` owns the inline-detour mechanics: `iced-x86` for instruction
+  lengths, a relay page allocated near the target so the patch is five bytes, trampoline and
+  relay pages deliberately never freed. It refuses an instruction-pointer-relative or
+  branching prologue rather than relocating it wrongly, and it does **not** suspend the game's
+  threads while writing the jump: that is a known gap, documented in the README.
+- **`retour` is not usable here.** It pulls in libudis86 as C, which does not cross-compile
+  under clang-cl (`-includestring.h` is a gcc-ism and `memset` ends up undeclared). That is
+  why the detour is written on top of a pure-Rust decoder instead.
 - **Hotkeys are polled from `Present` and gated on window focus.** `RegisterHotKey` was tried
   in the predecessor project: under this Wayland setup the registration succeeds and the key
   never fires, and a global grab is not wanted anyway.

@@ -76,6 +76,15 @@ pub struct PluginCallbacks {
     pub on_event: Option<
         unsafe extern "C" fn(ctx: *mut c_void, from: PluginHandle, topic: Str, payload: Bytes),
     >,
+    /// Callback delivery resumed after a pause. Never called for the initial start.
+    pub on_enable: Option<unsafe extern "C" fn(ctx: *mut c_void)>,
+    /// Callback delivery is being paused. The plugin keeps its state and stays loaded; this
+    /// is the moment to release anything that must not survive the pause, such as a
+    /// swapchain reference or an overlay.
+    ///
+    /// Not called when the plugin faulted: a plugin whose callback just crashed is not asked
+    /// to run more code.
+    pub on_disable: Option<unsafe extern "C" fn(ctx: *mut c_void)>,
 }
 
 impl PluginCallbacks {
@@ -93,6 +102,8 @@ impl PluginCallbacks {
             on_command: None,
             on_message: None,
             on_event: None,
+            on_enable: None,
+            on_disable: None,
         }
     }
 }

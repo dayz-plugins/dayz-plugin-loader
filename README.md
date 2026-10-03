@@ -23,6 +23,8 @@ The loader gives every plugin:
 - **Game addresses by name**, resolved from the
   [dayz-data](https://github.com/dayz-plugins/dayz-data) database, so no plugin carries an
   address of its own and a game update is a data change rather than a release of everything.
+- **Hooks the loader owns**: byte patches, virtual table slots and inline detours registered
+  through the host, so they are undone when the plugin stops, faults or the game exits.
 - **Isolation**: every call into a plugin is wrapped against panics and hardware faults. A
   plugin that faults is logged and disabled; the other plugins and the game keep running.
 
@@ -74,8 +76,8 @@ All three also accept `-flag` and `/flag` spelling.
 ```
 DayZ/
 ├── dxgi.dll                        the loader
+├── plugins/*.dll                   plugins, discovered in alphabetical order
 └── dayz-plugins/
-    ├── plugins/*.dll               plugins, loaded in alphabetical order
     ├── config/loader.toml          loader settings
     ├── config/hotkeys.toml         hotkey overrides
     ├── config/<plugin>.toml        one file per plugin, written by the loader
@@ -83,6 +85,11 @@ DayZ/
     ├── data/builds/*.json          one file per known game build
     └── logs/loader.log             current run; the previous one is loader.prev.log
 ```
+
+`plugins/` is the only directory anything is dropped into by hand, which is why it sits in
+the game folder rather than under `dayz-plugins/`. A DLL in there that exports no
+`dayz_plugin_describe` is ignored without being loaded at all, so a plugin's own dependency
+or a leftover from another project cannot have its `DllMain` run by accident.
 
 ## Writing a plugin
 
@@ -145,11 +152,46 @@ separated versions compared component by component, so `1.10` is newer than `1.9
 | `plugin stop <name>` | Call the plugin's stop export and stop delivering callbacks. |
 | `plugin disable`/`enable <name>` | Pause and resume callback delivery without stopping. |
 
-There is deliberately no reload. Unloading the DLL would mean `FreeLibrary` while the hooks
-it installed, the threads it started and the pointers the loader and other plugins hold are
-all still live, and a plugin name can only be used once per launch because handles are
-indices that never move. Rebuild and restart the game; `plugin load` is for a DLL this session
-has not seen.
+A plugin whose plugin dependency is missing is not rejected, it *waits*: `plugin list` shows
+it as waiting, and it starts by itself the moment the dependency does. `plugin load` pulls in
+missing dependencies first, so loading the top of a chain loads the chain.
+
+There is deliberately no reload. Unloading the DLL would mean `FreeLibrary` while the threads
+it started and the pointers the loader and other plugins hold are all still live, and a plugin
+name can only be used once per launch because handles are indices that never move. Rebuild and
+restart the game; `plugin load` is for a DLL this session has not seen.
+
+### Lifecycle callbacks
+
+| Callback | When |
+| --- | --- |
+| `start` | The plugin is created. The only place registrations are allowed. |
+| `on_disable` | `plugin disable`: delivery is about to pause, state is kept. |
+| `on_enable` | `plugin enable`: delivery resumed. |
+| `stop(Unload)` | `plugin stop`: the game keeps running, so release everything. |
+| `stop(Exit)` | The process is going away; do the least that is correct. |
+| `stop(StartFailed)` | `start` failed partway and the loader is undoing it. |
+
+### Hooks
+
+A plugin can patch the game, but registering the hook through the loader means the loader
+holds the original and puts it back:
+
+```rust
+// SAFETY: the caller is patching the game; the loader checks the address, not the intent.
+let hook = unsafe { host.patch(address, &[0x90; 5], "skip the retail check")? };
+let (hook, original) = unsafe { host.hook_vtable(swapchain, 8, my_present, "present")? };
+let (hook, trampoline) = unsafe { host.detour(target, my_fn, "camera update")? };
+host.remove_hook(hook)?;                 // or let the loader do it on stop
+```
+
+The loader refuses an address that is not committed memory and one that another hook already
+holds, undoes a plugin's hooks in reverse order when it stops, and lists them all in the
+console's `hooks` command. A detour steals whole instructions, refuses a prologue it cannot
+relocate (anything instruction-pointer-relative or branching), and jumps through a relay page
+allocated near the target so the patch stays five bytes. The game's other threads are not
+suspended while that jump is written, so install hooks from `start` or `on_swapchain` rather
+than mid-frame.
 
 Build it as a `cdylib` for `x86_64-pc-windows-msvc` and drop the DLL into
 `dayz-plugins/plugins/`. See `examples/hello-plugin` for the complete crate.

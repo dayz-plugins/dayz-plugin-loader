@@ -104,6 +104,22 @@ pub enum LogLevel {
     Trace = 5,
 }
 
+/// Why a plugin's stop export is being called.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum StopReason {
+    /// The game is shutting down. Everything is about to disappear anyway, so do the least
+    /// that is correct: a long teardown here delays the process exit for no benefit.
+    Exit = 0,
+    /// The plugin was stopped on request (`plugin stop` in the console) while the game keeps
+    /// running. Remove hooks, stop threads and release resources: whatever is left behind
+    /// stays behind for the rest of the session.
+    Unload = 1,
+    /// The plugin's `start` failed partway and the loader is undoing it.
+    StartFailed = 2,
+}
+
 /// What a [`Dependency`] names.
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

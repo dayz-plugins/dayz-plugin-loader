@@ -24,17 +24,21 @@ pub use callbacks::{PluginCallbacks, PresentInfo, SwapchainInfo};
 pub use host::{HostApi, ReplyFn};
 pub use types::{
     ArgEntry, Bytes, CommandDesc, Dependency, DependencyKind, EnvEntry, HotkeyDesc, LogLevel,
-    PluginHandle, PluginInfo, SettingDesc, SettingFlags, SettingKind, Status, Str,
+    PluginHandle, PluginInfo, SettingDesc, SettingFlags, SettingKind, Status, StopReason, Str,
 };
 
 /// Version of this ABI. The loader refuses plugins describing a different major version.
-pub const API_VERSION: u32 = 1;
+///
+/// 2 added the dependency list to [`PluginInfo`], the enable and disable callbacks, and the
+/// [`StopReason`] argument to the stop export.
+pub const API_VERSION: u32 = 2;
 
 /// Name of the export every plugin must provide: `extern "C" fn() -> *const PluginInfo`.
 pub const DESCRIBE_EXPORT: &str = "dayz_plugin_describe";
 /// Name of the start export: `extern "C" fn(*const HostApi, PluginHandle, *mut PluginCallbacks) -> Status`.
 pub const START_EXPORT: &str = "dayz_plugin_start";
-/// Name of the stop export: `extern "C" fn(*mut c_void)` receiving the plugin context.
+/// Name of the stop export: `extern "C" fn(*mut c_void, StopReason)` receiving the plugin
+/// context and why it is being stopped.
 pub const STOP_EXPORT: &str = "dayz_plugin_stop";
 
 /// Signature of [`DESCRIBE_EXPORT`]. The returned struct must stay valid while the DLL is loaded.
@@ -42,5 +46,6 @@ pub type DescribeFn = unsafe extern "C" fn() -> *const PluginInfo;
 /// Signature of [`START_EXPORT`]. The plugin fills `callbacks` and may keep `host` for its lifetime.
 pub type StartFn =
     unsafe extern "C" fn(*const HostApi, PluginHandle, *mut PluginCallbacks) -> Status;
-/// Signature of [`STOP_EXPORT`]. Called once with the context the plugin stored in its callbacks.
-pub type StopFn = unsafe extern "C" fn(*mut c_void);
+/// Signature of [`STOP_EXPORT`]. Called once with the context the plugin stored in its
+/// callbacks, and the reason the loader is stopping it.
+pub type StopFn = unsafe extern "C" fn(*mut c_void, StopReason);

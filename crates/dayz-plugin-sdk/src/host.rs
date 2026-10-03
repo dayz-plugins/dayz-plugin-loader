@@ -462,4 +462,123 @@ impl Host {
             (self.api.request_backbuffer_size)(self.api.host, self.handle, width, height)
         })
     }
+
+    /// Overwrite the bytes at `address`, with the loader keeping the originals.
+    ///
+    /// `note` is what the `hooks` console command calls this patch. The loader restores the
+    /// original bytes when the plugin stops, so a patch can never outlive its owner.
+    ///
+    /// # Errors
+    /// The address is not committed memory, the length is zero or absurd, or something has
+    /// already hooked that address.
+    ///
+    /// # Safety
+    /// The caller is patching the game's code: `address` must be the instruction boundary
+    /// they mean, and `bytes` must be valid code for it.
+    pub unsafe fn patch(
+        &self,
+        address: *mut c_void,
+        bytes: &[u8],
+        note: &str,
+    ) -> Result<Hook, PluginError> {
+        let mut id = 0u64;
+        // SAFETY: `bytes` and `note` outlive the call; `id` is a valid out-pointer. The
+        // caller's obligations are this function's own safety contract.
+        check(unsafe {
+            (self.api.hook_patch)(
+                self.api.host,
+                self.handle,
+                address,
+                bytes.as_ptr(),
+                bytes.len(),
+                Str::new(note),
+                &raw mut id,
+            )
+        })?;
+        Ok(Hook(id))
+    }
+
+    /// Replace one entry of the virtual table `object` points at, returning the hook and the
+    /// pointer that was there, which is how the replacement reaches the original.
+    ///
+    /// # Errors
+    /// A null pointer, a slot that is not writable, or a slot already hooked.
+    ///
+    /// # Safety
+    /// `object` must point at an object with a virtual table of at least `index + 1` entries,
+    /// and `replacement` must have the signature that entry is called with.
+    pub unsafe fn hook_vtable(
+        &self,
+        object: *mut c_void,
+        index: u32,
+        replacement: *mut c_void,
+        note: &str,
+    ) -> Result<(Hook, *mut c_void), PluginError> {
+        let (mut original, mut id) = (core::ptr::null_mut(), 0u64);
+        // SAFETY: `note` outlives the call and both out-pointers are valid; the pointer
+        // contracts are this function's own safety contract.
+        check(unsafe {
+            (self.api.hook_vtable)(
+                self.api.host,
+                self.handle,
+                object,
+                index,
+                replacement,
+                Str::new(note),
+                &raw mut original,
+                &raw mut id,
+            )
+        })?;
+        Ok((Hook(id), original))
+    }
+
+    /// Detour `target` to `replacement`, returning the hook and a trampoline that calls the
+    /// original function.
+    ///
+    /// # Errors
+    /// A null pointer, an address that is not committed code, a prologue the loader cannot
+    /// relocate, or an address something already hooked.
+    ///
+    /// # Safety
+    /// `target` must be a function entry point and `replacement` must have its exact
+    /// signature and calling convention; nothing can check that for the caller.
+    pub unsafe fn detour(
+        &self,
+        target: *mut c_void,
+        replacement: *mut c_void,
+        note: &str,
+    ) -> Result<(Hook, *mut c_void), PluginError> {
+        let (mut trampoline, mut id) = (core::ptr::null_mut(), 0u64);
+        // SAFETY: `note` outlives the call and both out-pointers are valid; the signature
+        // match is this function's own safety contract.
+        check(unsafe {
+            (self.api.hook_detour)(
+                self.api.host,
+                self.handle,
+                target,
+                replacement,
+                Str::new(note),
+                &raw mut trampoline,
+                &raw mut id,
+            )
+        })?;
+        Ok((Hook(id), trampoline))
+    }
+
+    /// Undo one hook now. The loader undoes whatever is left when the plugin stops, so this
+    /// is only needed to remove a hook earlier than that.
+    ///
+    /// # Errors
+    /// The hook does not exist or belongs to another plugin.
+    pub fn remove_hook(&self, hook: Hook) -> Result<(), PluginError> {
+        // SAFETY: valid table pointer.
+        check(unsafe { (self.api.hook_remove)(self.api.host, self.handle, hook.0) })
+    }
 }
+
+/// A hook the loader installed for this plugin, and the handle to remove it early.
+///
+/// Dropping one does nothing: the loader owns the hook and removes it when the plugin stops.
+/// That is the point of registering it there rather than patching the game directly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Hook(u64);

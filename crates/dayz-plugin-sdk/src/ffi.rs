@@ -10,7 +10,7 @@ use std::sync::OnceLock;
 
 use dayz_plugin_api::{
     self as api, Bytes, HostApi, LogLevel, PluginCallbacks, PluginHandle, PluginInfo, ReplyFn,
-    Status, Str, API_VERSION,
+    Status, StopReason, Str, API_VERSION,
 };
 
 use crate::host::{bytes_from, str_from, Host, PluginError, PluginRef};
@@ -147,6 +147,8 @@ pub unsafe fn start<P: Plugin>(
             on_command: Some(on_command::<P>),
             on_message: Some(on_message::<P>),
             on_event: Some(on_event::<P>),
+            on_enable: Some(on_enable::<P>),
+            on_disable: Some(on_disable::<P>),
         });
     }
     Status::Ok
@@ -156,7 +158,7 @@ pub unsafe fn start<P: Plugin>(
 ///
 /// # Safety
 /// `ctx` must be the pointer written by [`start`].
-pub unsafe fn stop<P: Plugin>(slot: &'static Slot<P>, ctx: *mut c_void) {
+pub unsafe fn stop<P: Plugin>(slot: &'static Slot<P>, ctx: *mut c_void, reason: StopReason) {
     let Some(state) = slot.state.get() else {
         return;
     };
@@ -168,8 +170,20 @@ pub unsafe fn stop<P: Plugin>(slot: &'static Slot<P>, ctx: *mut c_void) {
         return;
     }
     guard(state, "stop", |s| {
-        s.plugin.stop(&s.host);
+        s.plugin.stop(&s.host, reason);
     });
+}
+
+unsafe extern "C" fn on_enable<P: Plugin>(ctx: *mut c_void) {
+    // SAFETY: documented pointer contracts of this callback.
+    let s = unsafe { state::<P>(ctx) };
+    guard(s, "on_enable", |s| s.plugin.on_enable(&s.host));
+}
+
+unsafe extern "C" fn on_disable<P: Plugin>(ctx: *mut c_void) {
+    // SAFETY: documented pointer contracts of this callback.
+    let s = unsafe { state::<P>(ctx) };
+    guard(s, "on_disable", |s| s.plugin.on_disable(&s.host));
 }
 
 /// Run a callback, turning a panic into a log line instead of unwinding into the loader.

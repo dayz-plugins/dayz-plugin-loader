@@ -1,5 +1,7 @@
 //! The trait a plugin implements.
 
+use dayz_plugin_api::StopReason;
+
 use crate::deps::Dependency;
 use crate::host::{Host, PluginError, PluginRef};
 
@@ -31,6 +33,11 @@ pub struct PresentInfo {
 
 /// A loader plugin. Every callback has a no-op default.
 ///
+/// The lifecycle, in order: [`Plugin::start`] creates the plugin and is the only place
+/// registrations are allowed; callbacks run until it is paused by `plugin disable`
+/// ([`Plugin::on_disable`]) and resumed ([`Plugin::on_enable`]); [`Plugin::stop`] runs once,
+/// with a [`StopReason`] saying whether the plugin was unloaded or the game is exiting.
+///
 /// Callbacks take `&self` because the loader may re-enter the plugin (for example a setting
 /// change triggered from `on_present`), so state needs interior mutability (`Mutex`,
 /// atomics). Callbacks run on game threads; keep them short.
@@ -53,8 +60,21 @@ pub trait Plugin: Sized + Send + Sync + 'static {
     /// Return an error to stay unloaded; the loader logs it and continues with other plugins.
     fn start(host: Host) -> Result<Self, PluginError>;
 
-    /// The plugin is being unloaded (game exit or loader shutdown).
-    fn stop(&self, _host: &Host) {}
+    /// The plugin is being stopped: `plugin stop` in the console, the game exiting, or a
+    /// `start` that failed partway. `reason` says which, and
+    /// [`StopReason::Exit`](crate::api::StopReason::Exit) is the one case where doing less is
+    /// better, because the process is about to vanish anyway.
+    ///
+    /// Hooks registered through the host are torn down by the loader either way; this is for
+    /// everything the plugin owns itself.
+    fn stop(&self, _host: &Host, _reason: StopReason) {}
+
+    /// Callback delivery resumed after `plugin disable`.
+    fn on_enable(&self, _host: &Host) {}
+
+    /// Callback delivery is being paused by `plugin disable`. The plugin stays loaded and
+    /// keeps its state; nothing but this callback runs until it is enabled again.
+    fn on_disable(&self, _host: &Host) {}
 
     /// The game's swapchain was created or recreated.
     fn on_swapchain(&self, _host: &Host, _info: &SwapchainInfo) {}

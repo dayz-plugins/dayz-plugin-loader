@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::Mutex;
 
 use dayz_plugin_api::{
-    DescribeFn, PluginCallbacks, PluginHandle, StartFn, Status, StopFn, API_VERSION,
+    DescribeFn, PluginCallbacks, PluginHandle, StartFn, Status, StopFn, StopReason, API_VERSION,
     DESCRIBE_EXPORT, START_EXPORT, STOP_EXPORT,
 };
 use dayz_plugin_core::deps::{self, Candidate};
@@ -102,11 +102,13 @@ impl Active {
         self.enabled.load(Ordering::Relaxed)
     }
 
-    /// Resume callback delivery. Returns whether this changed anything.
+    /// Resume callback delivery and tell the plugin. Returns whether this changed anything.
     pub(crate) fn enable(&self) -> bool {
         let changed = !self.enabled.swap(true, Ordering::Relaxed);
         if changed {
             super::state().set_enabled(self.handle, true);
+            // After the atomic, so the plugin may already act on frames from here on.
+            super::dispatch::enabled(self, true);
         }
         changed
     }
@@ -123,7 +125,14 @@ impl Active {
     }
 
     /// Stop delivering callbacks on request, without the error log a fault produces.
+    ///
+    /// The plugin is told first and the atomic cleared afterwards, so `on_disable` is the last
+    /// callback it sees rather than racing a frame that is already in flight.
     pub(crate) fn suspend(&self) -> bool {
+        if !self.is_enabled() {
+            return false;
+        }
+        super::dispatch::enabled(self, false);
         let changed = self.enabled.swap(false, Ordering::Relaxed);
         if changed {
             super::state().set_enabled(self.handle, false);
@@ -131,13 +140,38 @@ impl Active {
         changed
     }
 
-    /// Call the stop export, if the plugin has one.
-    pub(crate) fn call_stop(&self) {
-        let Some(stop) = self.stop else { return };
-        let ctx = self.callbacks.ctx;
-        // SAFETY: `ctx` is the pointer the plugin gave us in `start`.
-        if let Err(e) = unsafe { super::guard::call(|| stop(ctx)) } {
-            log::error!("[{}] {STOP_EXPORT} faulted: {e}", self.name);
+    /// Call the stop export, if the plugin has one, and tear down its hooks either way.
+    ///
+    /// The plugin runs first and the loader cleans up after it: a plugin that removes its own
+    /// hook in `stop` is the normal case, and the registry treats an already-removed hook as
+    /// nothing to do.
+    pub(crate) fn call_stop(&self, reason: StopReason) {
+        if let Some(stop) = self.stop {
+            let ctx = self.callbacks.ctx;
+            // SAFETY: `ctx` is the pointer the plugin gave us in `start`.
+            if let Err(e) = unsafe { super::guard::call(|| stop(ctx, reason)) } {
+                log::error!("[{}] {STOP_EXPORT} faulted: {e}", self.name);
+            }
+        }
+        super::plugin_hooks::remove_all(self.handle, &self.name);
+    }
+}
+
+/// Whether a file even claims to be a plugin, decided without loading it.
+///
+/// `plugins/` is a directory in the game folder, so it collects things: a DLL a plugin ships
+/// as its own dependency, or the predecessor project's proxy. `LoadLibrary` on one of those
+/// runs its `DllMain`, which for a proxy DLL means installing hooks nobody asked for. An
+/// export name appears literally in the file's export table, so looking for the describe
+/// export's name in the bytes answers the question without mapping anything.
+fn claims_to_be_a_plugin(file: &Path) -> bool {
+    match std::fs::read(file) {
+        Ok(bytes) => bytes
+            .windows(DESCRIBE_EXPORT.len())
+            .any(|w| w == DESCRIBE_EXPORT.as_bytes()),
+        Err(e) => {
+            log::warn!("{}: {e}", file.display());
+            false
         }
     }
 }
@@ -152,6 +186,16 @@ fn plugin_files(dir: &Path) -> Vec<PathBuf> {
         .flatten()
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("dll")))
+        .filter(|p| {
+            let claims = claims_to_be_a_plugin(p);
+            if !claims {
+                log::info!(
+                    "ignoring {}: it exports no {DESCRIBE_EXPORT}, so it is not a plugin",
+                    p.display()
+                );
+            }
+            claims
+        })
         .collect();
     files.sort();
     files
@@ -195,6 +239,16 @@ fn wide(path: &Path) -> Vec<u16> {
         .collect()
 }
 
+/// Described plugins waiting for a dependency, in the order they were discovered.
+static PENDING: Mutex<Vec<Described>> = Mutex::new(Vec::new());
+
+/// Lock the pending list, recovering a poisoned lock: it is plain data.
+fn pending() -> std::sync::MutexGuard<'static, Vec<Described>> {
+    PENDING
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// A DLL that loaded and described itself, before any dependency decision.
 pub(super) struct Described {
     /// File it came from.
@@ -207,6 +261,11 @@ pub(super) struct Described {
     pub(super) declared: Vec<external::Declared>,
     exports: Exports,
 }
+
+// SAFETY: the function pointers inside `exports` belong to a DLL that is never unloaded, and
+// the ABI requires the exports to be callable from any thread, so moving this between threads
+// cannot invalidate anything.
+unsafe impl Send for Described {}
 
 /// First pass: load a DLL and read its description. Nothing is started yet.
 pub(super) fn describe_one(file: &Path) -> Result<Described, String> {
@@ -279,10 +338,23 @@ pub(super) fn start_one(described: &Described) -> Result<Active, String> {
         unsafe { super::guard::call(|| (exports.start)(host, handle, &raw mut callbacks)) };
     super::state().phase = previous;
 
-    match status {
-        Ok(Status::Ok) => {}
-        Ok(other) => return Err(format!("{START_EXPORT} returned {other:?}")),
-        Err(e) => return Err(format!("{START_EXPORT} faulted: {e}")),
+    let failure = match status {
+        Ok(Status::Ok) => None,
+        Ok(other) => Some(format!("{START_EXPORT} returned {other:?}")),
+        Err(e) => Some(format!("{START_EXPORT} faulted: {e}")),
+    };
+    if let Some(failure) = failure {
+        // A start that got far enough to publish a context may have registered a hook or
+        // allocated; give it the chance to undo that, then undo what the loader holds.
+        if !callbacks.ctx.is_null() {
+            if let Some(stop) = exports.stop {
+                let ctx = callbacks.ctx;
+                // SAFETY: `ctx` is the pointer the plugin itself wrote into the table.
+                let _ = unsafe { super::guard::call(|| stop(ctx, StopReason::StartFailed)) };
+            }
+        }
+        super::plugin_hooks::remove_all(handle, name);
+        return Err(failure);
     }
     if callbacks.struct_size < core::mem::size_of::<PluginCallbacks>() {
         log::warn!("[{name}] was built against an older callback table");
@@ -333,18 +405,95 @@ pub(crate) fn load_all(paths: &Paths, disabled: &[String]) {
         })
         .collect();
     let plan = deps::plan(&candidates);
-    for (index, reason) in &plan.rejected {
-        log::error!("[{}] not started: {reason}", candidates[*index].name);
-    }
+    // Taken out one at a time, because a rejected plugin is kept rather than dropped.
+    let mut described: Vec<Option<Described>> = described.into_iter().map(Some).collect();
 
     let mut started = Vec::new();
     for index in plan.order {
-        match start_one(&described[index]) {
+        let Some(plugin) = described[index].take() else {
+            continue;
+        };
+        match start_one(&plugin) {
             Ok(active) => started.push(active),
-            Err(e) => log::error!("{}: {e}", described[index].file.display()),
+            Err(e) => log::error!("{}: {e}", plugin.file.display()),
         }
     }
     publish(started);
+
+    for (index, reason) in plan.rejected {
+        let Some(plugin) = described[index].take() else {
+            continue;
+        };
+        if can_still_be_satisfied(&reason) {
+            log::warn!("[{}] waiting: {reason}", plugin.name);
+            super::state().set_pending(&plugin.name, &reason.to_string());
+            pending().push(plugin);
+        } else {
+            log::error!("[{}] not started: {reason}", plugin.name);
+        }
+    }
+    start_pending();
+}
+
+/// Whether another plugin starting could still make this rejection go away.
+///
+/// A missing plugin can arrive later, through `plugin load`; a version mismatch, a cycle and a
+/// duplicate name cannot change within one launch, so those are failures and not waits.
+fn can_still_be_satisfied(reason: &deps::Rejection) -> bool {
+    match reason {
+        deps::Rejection::Missing(_) | deps::Rejection::DependencyRejected(_) => true,
+        deps::Rejection::Version { .. }
+        | deps::Rejection::Cycle(_)
+        | deps::Rejection::DuplicateName(_) => false,
+    }
+}
+
+/// Names of the plugins still waiting for a dependency.
+pub(super) fn pending_names() -> Vec<String> {
+    pending().iter().map(|p| p.name.clone()).collect()
+}
+
+/// Take one waiting plugin out of the list, by name.
+pub(super) fn take_pending(name: &str) -> Option<Described> {
+    let mut list = pending();
+    let index = list.iter().position(|p| p.name == name)?;
+    Some(list.remove(index))
+}
+
+/// Start every waiting plugin whose requirements are now met, repeatedly, because starting
+/// one can be what another was waiting for. Returns the names that started.
+pub(super) fn start_pending() -> Vec<String> {
+    let mut names = Vec::new();
+    loop {
+        // The pending lock is never held while the state lock is taken, so the two orders
+        // can never meet.
+        let requirements: Vec<(String, Vec<dayz_plugin_core::deps::PluginReq>)> = pending()
+            .iter()
+            .map(|p| {
+                (
+                    p.name.clone(),
+                    external::plugin_requirements(&p.name, &p.declared),
+                )
+            })
+            .collect();
+        let ready = requirements
+            .into_iter()
+            .find(|(_, reqs)| super::lifecycle::unmet_plugin_requirement(reqs).is_none())
+            .map(|(name, _)| name);
+        let Some(name) = ready else { return names };
+        let Some(plugin) = take_pending(&name) else {
+            return names;
+        };
+        super::state().clear_pending(&name);
+        match start_one(&plugin) {
+            Ok(active) => {
+                log::info!("[{name}] started: its dependencies are available now");
+                append(active);
+                names.push(name);
+            }
+            Err(e) => log::error!("[{name}] {e}"),
+        }
+    }
 }
 
 /// Append one plugin that was started after the initial load.
@@ -356,7 +505,7 @@ pub(super) fn append(plugin: Active) {
 pub(crate) fn stop_all() {
     for &plugin in active() {
         if plugin.is_enabled() {
-            plugin.call_stop();
+            plugin.call_stop(StopReason::Exit);
         }
     }
 }

@@ -76,6 +76,8 @@ pub enum Line {
     Plugin(PluginOp, Option<String>),
     /// `symbols [prefix]`: resolved game addresses and offsets.
     Symbols(Option<String>),
+    /// `hooks`: patches, vtable slots and detours plugins installed through the loader.
+    Hooks,
     /// `<plugin.key>` alone prints the value, `<plugin.key> <value>` sets it.
     Variable(String, Option<String>),
     /// `<plugin.command> [args...]`: forwarded to the owning plugin with raw args.
@@ -136,6 +138,7 @@ pub fn parse(line: &str) -> Result<Line, ParseError> {
             Line::Plugin(op, name)
         }
         "symbols" | "syms" => Line::Symbols(optional(rest)),
+        "hooks" => Line::Hooks,
         "get" => {
             if rest.is_empty() {
                 return Err(ParseError::NeedsName("get"));
@@ -188,6 +191,10 @@ pub const BUILTIN_HELP: &[(&str, &str)] = &[
         "symbols [prefix]",
         "List resolved game addresses and offsets.",
     ),
+    (
+        "hooks",
+        "List the hooks plugins installed through the loader.",
+    ),
     ("get <plugin.key>", "Print a setting."),
     ("set <plugin.key> <value>", "Change a setting."),
     ("<plugin.key> [value]", "Shorthand for get / set."),
@@ -215,6 +222,7 @@ mod tests {
         assert_eq!(parse("ls dayzvr"), Ok(Line::List(Some("dayzvr".into()))));
         assert_eq!(parse("plugins"), Ok(Line::Plugin(PluginOp::List, None)));
         assert_eq!(parse("symbols"), Ok(Line::Symbols(None)));
+        assert_eq!(parse("hooks"), Ok(Line::Hooks));
         assert_eq!(
             parse("syms Render."),
             Ok(Line::Symbols(Some("render.".into())))

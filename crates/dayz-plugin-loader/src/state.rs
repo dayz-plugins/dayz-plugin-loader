@@ -84,6 +84,11 @@ pub struct State {
     pub phase: Phase,
     /// Backbuffer size requested by a plugin, if any.
     pub backbuffer_override: Option<(u32, u32)>,
+    /// Plugins that described themselves but are waiting for a dependency: name and reason.
+    ///
+    /// They are not rejected, only not started yet. `plugin load <name>` starts one, and so
+    /// does the dependency it waits for becoming available.
+    pub pending: Vec<(String, String)>,
     /// Recent console output.
     pub console: VecDeque<String>,
     /// Produces the lines the `symbols` command prints.
@@ -91,10 +96,18 @@ pub struct State {
     /// A function pointer, because the symbol table belongs to the platform layer and this
     /// module must stay free of it. The platform layer installs the real one at startup.
     pub symbol_lines: fn(Option<&str>) -> Vec<String>,
+    /// Produces the lines the `hooks` command prints. A function pointer for the same reason
+    /// as [`State::symbol_lines`]: the hook registry belongs to the platform layer.
+    pub hook_lines: fn() -> Vec<String>,
 }
 
 /// Default for [`State::symbol_lines`]: no database, nothing to print.
 fn no_symbols(_prefix: Option<&str>) -> Vec<String> {
+    Vec::new()
+}
+
+/// Default for [`State::hook_lines`]: no platform layer, so no hooks.
+fn no_hooks() -> Vec<String> {
     Vec::new()
 }
 
@@ -114,8 +127,10 @@ impl State {
             hotkey_overrides,
             phase: Phase::Idle,
             backbuffer_override: None,
+            pending: Vec::new(),
             console: VecDeque::new(),
             symbol_lines: no_symbols,
+            hook_lines: no_hooks,
         }
     }
 
@@ -352,6 +367,17 @@ impl State {
         }
         self.backbuffer_override = Some((width, height));
         Ok(())
+    }
+
+    /// Note that a plugin is waiting for a dependency, replacing any earlier note.
+    pub fn set_pending(&mut self, plugin: &str, reason: &str) {
+        self.pending.retain(|(name, _)| name != plugin);
+        self.pending.push((plugin.to_owned(), reason.to_owned()));
+    }
+
+    /// Forget that a plugin was waiting, because it started or will never start.
+    pub fn clear_pending(&mut self, plugin: &str) {
+        self.pending.retain(|(name, _)| name != plugin);
     }
 
     /// Record the dependencies a plugin declared, for the console to show.

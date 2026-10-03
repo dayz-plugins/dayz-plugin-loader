@@ -36,7 +36,7 @@ mod settings;
 
 pub use dayz_plugin_api as api;
 pub use deps::Dependency;
-pub use host::{Arg, CommandLine, Host, PluginError, PluginRef};
+pub use host::{Arg, CommandLine, Hook, Host, PluginError, PluginRef};
 pub use plugin::{Plugin, PresentInfo, SwapchainInfo};
 pub use settings::{Setting, SettingKind};
 
@@ -81,9 +81,12 @@ macro_rules! export_plugin {
         /// # Safety
         /// Called by the loader with the context from `dayz_plugin_start`.
         #[no_mangle]
-        pub unsafe extern "C" fn dayz_plugin_stop(ctx: *mut ::core::ffi::c_void) {
+        pub unsafe extern "C" fn dayz_plugin_stop(
+            ctx: *mut ::core::ffi::c_void,
+            reason: $crate::api::StopReason,
+        ) {
             // SAFETY: `ctx` is the pointer `dayz_plugin_start` wrote into the callbacks.
-            unsafe { $crate::__private::stop::<$plugin>(&__DAYZ_PLUGIN_SLOT, ctx) }
+            unsafe { $crate::__private::stop::<$plugin>(&__DAYZ_PLUGIN_SLOT, ctx, reason) }
         }
 
         const _: () = {

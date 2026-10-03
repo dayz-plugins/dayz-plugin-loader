@@ -16,7 +16,7 @@ use dayz_plugin_core::settings;
 use crate::process::Process;
 use crate::state::CommandInfo;
 
-use super::{console, data, plugins, state};
+use super::{console, data, plugin_hooks, plugins, state};
 
 /// Owned backing storage for every string the table hands out. Leaked once at startup so
 /// the pointers stay valid for as long as any plugin can hold them.
@@ -101,6 +101,10 @@ pub(crate) fn build(game_dir: &str, config_dir: &str, process: &Process) -> &'st
         symbol_get,
         offset_get,
         symbol_require,
+        hook_patch,
+        hook_vtable,
+        hook_detour,
+        hook_remove,
     }))
 }
 
@@ -406,4 +410,83 @@ unsafe extern "C" fn symbol_require(_host: *mut c_void, plugin: PluginHandle, na
     }
     log::error!("[{plugin_name}] requires {name}, which did not resolve for this build");
     Status::NotFound
+}
+
+unsafe extern "C" fn hook_patch(
+    _host: *mut c_void,
+    plugin: PluginHandle,
+    address: *mut c_void,
+    bytes: *const u8,
+    len: usize,
+    note: Str,
+    out_id: *mut u64,
+) -> Status {
+    if bytes.is_null() || out_id.is_null() {
+        return Status::InvalidArgument;
+    }
+    // SAFETY: the ABI requires `bytes`/`len` to describe readable memory for this call.
+    let patch = unsafe { core::slice::from_raw_parts(bytes, len) };
+    match plugin_hooks::patch(plugin, address as usize, patch, &text(note)) {
+        Ok(id) => {
+            // SAFETY: checked non-null; the ABI requires a writable `u64`.
+            unsafe { out_id.write(id) };
+            Status::Ok
+        }
+        Err(status) => status,
+    }
+}
+
+unsafe extern "C" fn hook_vtable(
+    _host: *mut c_void,
+    plugin: PluginHandle,
+    object: *mut c_void,
+    index: u32,
+    replacement: *mut c_void,
+    note: Str,
+    out_original: *mut *mut c_void,
+    out_id: *mut u64,
+) -> Status {
+    if out_original.is_null() || out_id.is_null() {
+        return Status::InvalidArgument;
+    }
+    match plugin_hooks::vtable(plugin, object, index, replacement, &text(note)) {
+        Ok((id, original)) => {
+            // SAFETY: both checked non-null; the ABI requires writable out-params.
+            unsafe {
+                out_original.write(original);
+                out_id.write(id);
+            }
+            Status::Ok
+        }
+        Err(status) => status,
+    }
+}
+
+unsafe extern "C" fn hook_detour(
+    _host: *mut c_void,
+    plugin: PluginHandle,
+    target: *mut c_void,
+    replacement: *mut c_void,
+    note: Str,
+    out_trampoline: *mut *mut c_void,
+    out_id: *mut u64,
+) -> Status {
+    if out_trampoline.is_null() || out_id.is_null() {
+        return Status::InvalidArgument;
+    }
+    match plugin_hooks::detour(plugin, target, replacement, &text(note)) {
+        Ok((id, trampoline)) => {
+            // SAFETY: both checked non-null; the ABI requires writable out-params.
+            unsafe {
+                out_trampoline.write(trampoline);
+                out_id.write(id);
+            }
+            Status::Ok
+        }
+        Err(status) => status,
+    }
+}
+
+unsafe extern "C" fn hook_remove(_host: *mut c_void, plugin: PluginHandle, id: u64) -> Status {
+    plugin_hooks::remove(plugin, id)
 }

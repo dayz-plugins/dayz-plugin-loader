@@ -151,4 +151,55 @@ pub struct HostApi {
     /// one, so a game update produces a named missing symbol rather than a crash.
     pub symbol_require:
         unsafe extern "C" fn(host: *mut c_void, plugin: PluginHandle, name: Str) -> Status,
+
+    /// Overwrite `len` bytes at `address`, remembering what was there.
+    ///
+    /// The loader keeps the original bytes and restores them when the plugin stops, so a
+    /// patch cannot outlive the plugin that made it. `note` is what the console and the log
+    /// call this patch. Writes the hook id to `out_id`.
+    pub hook_patch: unsafe extern "C" fn(
+        host: *mut c_void,
+        plugin: PluginHandle,
+        address: *mut c_void,
+        bytes: *const u8,
+        len: usize,
+        note: Str,
+        out_id: *mut u64,
+    ) -> Status,
+    /// Replace entry `index` of the virtual table `object` points at.
+    ///
+    /// Writes the replaced pointer to `out_original`, which is what the plugin calls to reach
+    /// the original implementation, and the hook id to `out_id`. The loader puts the original
+    /// pointer back when the plugin stops.
+    pub hook_vtable: unsafe extern "C" fn(
+        host: *mut c_void,
+        plugin: PluginHandle,
+        object: *mut c_void,
+        index: u32,
+        replacement: *mut c_void,
+        note: Str,
+        out_original: *mut *mut c_void,
+        out_id: *mut u64,
+    ) -> Status,
+    /// Detour `target` to `replacement`, in place, for a function nothing else dispatches to.
+    ///
+    /// The relocated prologue is written to `out_trampoline`: calling that reaches the
+    /// original function. The loader removes the detour when the plugin stops.
+    ///
+    /// Returns [`Status::AlreadyExists`] when any plugin already detoured that address, and
+    /// [`Status::Unsupported`] when the prologue cannot be relocated.
+    pub hook_detour: unsafe extern "C" fn(
+        host: *mut c_void,
+        plugin: PluginHandle,
+        target: *mut c_void,
+        replacement: *mut c_void,
+        note: Str,
+        out_trampoline: *mut *mut c_void,
+        out_id: *mut u64,
+    ) -> Status,
+    /// Undo one hook by id, before the plugin stops. Hooks left behind are undone for it.
+    ///
+    /// Returns [`Status::NotFound`] for an unknown id or one belonging to another plugin.
+    pub hook_remove:
+        unsafe extern "C" fn(host: *mut c_void, plugin: PluginHandle, id: u64) -> Status,
 }
