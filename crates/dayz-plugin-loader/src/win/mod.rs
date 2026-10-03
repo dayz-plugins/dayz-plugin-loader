@@ -151,6 +151,8 @@ fn init() -> bool {
     let running = guard.plugins.iter().filter(|p| p.enabled).count();
     log::info!("{running} of {} plugins running", guard.plugins.len());
     drop(guard);
+    // Last, so a command typed in the first instant cannot race the registries.
+    console::start_input();
     running > 0
 }
 

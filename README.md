@@ -61,11 +61,18 @@ The game must be told to prefer the local `dxgi.dll` over the system one:
 WINEDLLOVERRIDES="dxgi=n,b" %command%
 ```
 
+Or skip Steam's launch options entirely and start the game from this repository, which also
+prints what is in `plugins/` and what will be ignored:
+
+```bash
+scripts/run-dayz.sh          # --console, every plugin; --stop closes it, --log follows the log
+```
+
 Loader flags go on the game's own command line:
 
 | Flag | Effect |
 | --- | --- |
-| `--console` | Open a console window carrying the loader log, the in-game console and the game's own standard output. |
+| `--console` | Open a console window carrying the loader log, the in-game console and the game's own standard output, and reading typed commands. |
 | `--noplugins` | Load no plugins at all, whatever the config says. |
 | `--loader-log=<level>` | Override the log level for one run. |
 

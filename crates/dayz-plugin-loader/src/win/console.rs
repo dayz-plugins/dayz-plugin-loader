@@ -1,5 +1,6 @@
 //! The `--console` window: a real Win32 console that carries the loader log, the in-game
-//! console output and whatever the game writes to its own standard streams.
+//! console output and whatever the game writes to its own standard streams, and reads
+//! commands typed into it.
 
 // FFI module: console allocation and stream redirection.
 #![allow(unsafe_code)]
@@ -100,4 +101,52 @@ pub(crate) fn print(line: &str) {
     let mut out = std::io::stdout();
     let _ = writeln!(out, "{line}");
     let _ = out.flush();
+}
+
+/// Start the thread that reads typed lines and executes them.
+///
+/// Deliberately not part of [`attach`]: that runs before the loader's state exists, and the
+/// first line typed would otherwise build a second, default state. Called once at the end of
+/// initialisation instead, so everything a command can name is already registered.
+pub(crate) fn start_input() {
+    if !is_active() {
+        return;
+    }
+    let spawned = std::thread::Builder::new()
+        .name("dayz-loader-console".to_owned())
+        .spawn(read_lines);
+    match spawned {
+        Ok(_) => print("type `help` for the commands this loader knows."),
+        Err(e) => log::warn!("no console input: {e}"),
+    }
+}
+
+/// Read lines until the console goes away, running each one.
+///
+/// A panic in here must not take the game with it, so the body is guarded and the thread
+/// simply stops: output keeps working even when input does not.
+fn read_lines() {
+    use std::io::BufRead;
+    let stdin = std::io::stdin();
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match stdin.lock().read_line(&mut line) {
+            // End of input: the console was closed, nothing more will arrive.
+            Ok(0) => return,
+            Ok(_) => {}
+            Err(e) => {
+                log::warn!("console input stopped: {e}");
+                return;
+            }
+        }
+        let typed = line.trim().to_owned();
+        if typed.is_empty() {
+            continue;
+        }
+        let outcome = std::panic::catch_unwind(|| super::run_console_line(None, &typed));
+        if outcome.is_err() {
+            log::error!("console command {typed:?} panicked");
+        }
+    }
 }
