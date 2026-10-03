@@ -1,0 +1,49 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/dayz-plugin-api",
+    "crates/dayz-plugin-sdk",
+    "crates/dayz-plugin-core",
+    "crates/dayz-plugin-loader",
+    "examples/hello-plugin",
+]
+# The config editor is an unrelated GUI tool with its own heavy dependency tree; it keeps
+# its own lock file so the loader workspace stays fast to build and test.
+exclude = ["tools/config-editor"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "Unlicense"
+repository = "https://github.com/dayz-plugins/dayz-plugin-loader"
+
+[workspace.dependencies]
+dayz-plugin-api = { path = "crates/dayz-plugin-api" }
+dayz-plugin-sdk = { path = "crates/dayz-plugin-sdk" }
+dayz-plugin-core = { path = "crates/dayz-plugin-core" }
+log = "0.4"
+thiserror = "2"
+toml = "0.9"
+serde = { version = "1", features = ["derive"] }
+
+[workspace.lints.rust]
+# "deny" instead of "forbid": the loader and the SDK are FFI boundaries and need unsafe in
+# exactly one module each, with a scoped allow and a reason. "forbid" cannot be re-allowed.
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+too_many_lines = "warn"
+unwrap_used = "warn"
+expect_used = "warn"
+undocumented_unsafe_blocks = "warn"
+
+[profile.release]
+opt-level = 2
+debug = 1
+lto = "thin"
+codegen-units = 1
+# Never "abort": a plugin panic must unwind so the loader can catch it at the boundary.
+panic = "unwind"
