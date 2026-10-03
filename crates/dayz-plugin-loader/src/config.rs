@@ -15,7 +15,11 @@ use serde::Deserialize;
 pub struct Paths {
     /// Directory of `DayZ_x64.exe`.
     pub game_dir: PathBuf,
-    /// `<game>/dayz-plugins/plugins`: plugin DLLs.
+    /// `<game>/plugins`: plugin DLLs.
+    ///
+    /// Deliberately not under `dayz-plugins/`: this is the one directory a person puts files
+    /// into, so it sits where they can find it, while everything the loader owns stays out
+    /// of the game directory's way.
     pub plugins_dir: PathBuf,
     /// `<game>/dayz-plugins/config`: `loader.toml`, `hotkeys.toml`, `<plugin>.toml`.
     pub config_dir: PathBuf,
@@ -32,7 +36,7 @@ impl Paths {
         let root = game_dir.join("dayz-plugins");
         Paths {
             game_dir: game_dir.to_path_buf(),
-            plugins_dir: root.join("plugins"),
+            plugins_dir: game_dir.join("plugins"),
             config_dir: root.join("config"),
             logs_dir: root.join("logs"),
             data_dir: root.join(dayz_data::DIRECTORY_NAME),
@@ -119,7 +123,7 @@ mod tests {
     #[test]
     fn paths_follow_layout() {
         let p = Paths::from_game_dir(Path::new("/g"));
-        assert_eq!(p.plugins_dir, Path::new("/g/dayz-plugins/plugins"));
+        assert_eq!(p.plugins_dir, Path::new("/g/plugins"));
         assert_eq!(p.data_dir, Path::new("/g/dayz-plugins/data"));
         assert_eq!(
             p.plugin_config("vr"),
