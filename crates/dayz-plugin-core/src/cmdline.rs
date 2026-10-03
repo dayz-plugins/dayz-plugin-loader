@@ -45,12 +45,23 @@ fn strip_prefix(token: &str) -> Option<&str> {
     for prefix in ["--", "-", "/"] {
         if let Some(rest) = token.strip_prefix(prefix) {
             // A bare or repeated "-", "--", "/" is not a name, and a negative number is a value.
-            if !rest.is_empty()
-                && !rest.starts_with(['-', '/'])
-                && !rest.starts_with(|c: char| c.is_ascii_digit())
+            if rest.is_empty()
+                || rest.starts_with(['-', '/'])
+                || rest.starts_with(|c: char| c.is_ascii_digit())
             {
-                return Some(rest);
+                continue;
             }
+            // A slash-prefixed switch is a Windows convention, and a Windows switch name
+            // never contains a path separator. Without this, every absolute POSIX path
+            // ("/run/media/…") would parse as the switch "run". The value after an "=" is
+            // exempt: "/profiles=C:\p" is a switch carrying a path.
+            if prefix == "/" {
+                let name = rest.split('=').next().unwrap_or(rest);
+                if name.contains(['/', '\\']) {
+                    continue;
+                }
+            }
+            return Some(rest);
         }
     }
     None
@@ -203,6 +214,24 @@ mod tests {
         let cmd = parse("--offset -1.5 -- -");
         assert_eq!(cmd.value("offset"), Some("-1.5"));
         assert_eq!(cmd.positionals().collect::<Vec<_>>(), vec!["--", "-"]);
+    }
+
+    #[test]
+    fn absolute_posix_paths_are_values_not_switches() {
+        // Regression: "/run/media/..." parsed as the switch "run", which swallowed the
+        // value of the option in front of it.
+        let cmd = parse("--exe /run/media/Data/DayZ_x64.exe --seed ./seed.json");
+        assert_eq!(cmd.value("exe"), Some("/run/media/Data/DayZ_x64.exe"));
+        assert_eq!(cmd.value("seed"), Some("./seed.json"));
+        assert!(!cmd.has("run"));
+    }
+
+    #[test]
+    fn slash_switches_still_work_and_may_carry_paths() {
+        let cmd = parse(r"/console /profiles=C:\Users\p /mod=@CF");
+        assert!(cmd.has("console"));
+        assert_eq!(cmd.value("profiles"), Some(r"C:\Users\p"));
+        assert_eq!(cmd.value("mod"), Some("@CF"));
     }
 
     #[test]
