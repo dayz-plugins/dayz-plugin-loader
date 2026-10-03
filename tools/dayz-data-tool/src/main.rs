@@ -80,7 +80,7 @@ fn validate(args: &CommandLine, dir: Option<&str>) -> Result<(), String> {
     );
     for build in &db.builds {
         println!(
-            "  {} {} symbols, {} offsets, {:?}, sha256 {}",
+            "  {} {} symbols, {} offsets, {:?}, sha256 {:?}",
             build.build.version,
             build.symbols.len(),
             build.offsets.len(),
@@ -134,7 +134,39 @@ fn resolve_against(args: &CommandLine, db: &Database) -> Result<(), String> {
         table.offsets().count(),
         table.issues().len()
     );
+    let disagreements = cross_check(&mapped.bytes, db, &table);
+    if !disagreements.is_empty() {
+        for line in &disagreements {
+            println!("  {line}");
+        }
+        return Err(format!(
+            "{} symbol(s) where the cache and the pattern disagree",
+            disagreements.len()
+        ));
+    }
     Ok(())
+}
+
+/// Compare the cached addresses against what the patterns alone find.
+///
+/// The patterns are the source of truth and the build file is a cache, so a disagreement means
+/// one of the two is stale: typically a seed address that moved while the pattern kept the byte
+/// run of the old one. Nothing else in the pipeline notices that, because each half verifies
+/// only against itself.
+fn cross_check(image: &[u8], db: &Database, cached: &SymbolTable) -> Vec<String> {
+    let scanned = SymbolTable::resolve(image, None, &db.patterns);
+    cached
+        .symbols()
+        .filter_map(|(name, resolved)| {
+            let found = scanned.symbol(name)?;
+            (found.rva != resolved.rva).then(|| {
+                format!(
+                    "mismatch: {name} is {:#X} in the build file but its pattern finds {:#X}",
+                    resolved.rva, found.rva
+                )
+            })
+        })
+        .collect()
 }
 
 fn generate_files(args: &CommandLine, dir: Option<&str>) -> Result<(), String> {
