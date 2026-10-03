@@ -2,7 +2,7 @@
 
 A plugin loader for DayZ, written in Rust. It ships as `dxgi.dll` next to `DayZ_x64.exe`,
 forwards every DXGI call to the real system library, and hosts native plugins that the game
-knows nothing about. Plugins are ordinary DLLs in `dayz-plugins/plugins/`; they are not PBO
+knows nothing about. Plugins are ordinary DLLs in `plugins/`; they are not PBO
 mods and need no server support.
 
 The loader gives every plugin:
@@ -77,7 +77,7 @@ All three also accept `-flag` and `/flag` spelling.
 DayZ/
 ├── dxgi.dll                        the loader
 ├── plugins/*.dll                   plugins, discovered in alphabetical order
-└── dayz-plugins/
+└── plugin-loader/
     ├── config/loader.toml          loader settings
     ├── config/hotkeys.toml         hotkey overrides
     ├── config/<plugin>.toml        one file per plugin, written by the loader
@@ -87,7 +87,7 @@ DayZ/
 ```
 
 `plugins/` is the only directory anything is dropped into by hand, which is why it sits in
-the game folder rather than under `dayz-plugins/`. A DLL in there that exports no
+the game folder rather than under `plugin-loader/`. A DLL in there that exports no
 `dayz_plugin_describe` is ignored without being loaded at all, so a plugin's own dependency
 or a leftover from another project cannot have its `DllMain` run by accident.
 
@@ -126,7 +126,7 @@ A plugin declares what it needs as a `const`, and the loader checks it before `s
 const DEPENDENCIES: &'static [Dependency] = &[
     Dependency::plugin("dayz-vr", ">=0.2, <1"),   // also starts dayz-vr first
     Dependency::library("openxr_loader.dll"),     // findable, not loaded by the loader
-    Dependency::file("dayz-plugins/data/hud.json"),
+    Dependency::file("plugin-loader/data/hud.json"),
     Dependency::symbol("render.prepare_view"),
     Dependency::plugin("dayz-hud", "").optional(), // order only; missing is fine
 ];
@@ -194,7 +194,7 @@ suspended while that jump is written, so install hooks from `start` or `on_swapc
 than mid-frame.
 
 Build it as a `cdylib` for `x86_64-pc-windows-msvc` and drop the DLL into
-`dayz-plugins/plugins/`. See `examples/hello-plugin` for the complete crate.
+`plugins/`. See `examples/hello-plugin` for the complete crate.
 
 A plugin in another language only needs the three exports and the structs from
 `crates/dayz-plugin-api`; nothing in the ABI is Rust specific.

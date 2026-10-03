@@ -79,11 +79,11 @@ if [[ ! -x "$dayz_dir/DayZ_x64.exe" && ! -f "$dayz_dir/DayZ_x64.exe" ]]; then
 fi
 
 # Plugin DLLs go in the game directory's own `plugins/`; everything the loader owns stays
-# under `dayz-plugins/`.
+# under `plugin-loader/`.
 plugins_dir="$dayz_dir/plugins"
-config_dir="$dayz_dir/dayz-plugins/config"
-data_dir="$dayz_dir/dayz-plugins/data"
-mkdir -p "$plugins_dir" "$config_dir" "$data_dir" "$dayz_dir/dayz-plugins/logs"
+config_dir="$dayz_dir/plugin-loader/config"
+data_dir="$dayz_dir/plugin-loader/data"
+mkdir -p "$plugins_dir" "$config_dir" "$data_dir" "$dayz_dir/plugin-loader/logs"
 cp -f "$out/dxgi.dll" "$dayz_dir/dxgi.dll"
 cp -f "$out/hello.dll" "$plugins_dir/hello.dll"
 # Config files carry the user's own values; never overwrite one that already exists.

@@ -17,15 +17,15 @@ pub struct Paths {
     pub game_dir: PathBuf,
     /// `<game>/plugins`: plugin DLLs.
     ///
-    /// Deliberately not under `dayz-plugins/`: this is the one directory a person puts files
+    /// Deliberately not under `plugin-loader/`: this is the one directory a person puts files
     /// into, so it sits where they can find it, while everything the loader owns stays out
     /// of the game directory's way.
     pub plugins_dir: PathBuf,
-    /// `<game>/dayz-plugins/config`: `loader.toml`, `hotkeys.toml`, `<plugin>.toml`.
+    /// `<game>/plugin-loader/config`: `loader.toml`, `hotkeys.toml`, `<plugin>.toml`.
     pub config_dir: PathBuf,
-    /// `<game>/dayz-plugins/logs`.
+    /// `<game>/plugin-loader/logs`.
     pub logs_dir: PathBuf,
-    /// `<game>/dayz-plugins/data`: the dayz-data database.
+    /// `<game>/plugin-loader/data`: the dayz-data database.
     pub data_dir: PathBuf,
 }
 
@@ -33,7 +33,7 @@ impl Paths {
     /// Standard layout under `game_dir`.
     #[must_use]
     pub fn from_game_dir(game_dir: &Path) -> Self {
-        let root = game_dir.join("dayz-plugins");
+        let root = game_dir.join("plugin-loader");
         Paths {
             game_dir: game_dir.to_path_buf(),
             plugins_dir: game_dir.join("plugins"),
@@ -124,14 +124,14 @@ mod tests {
     fn paths_follow_layout() {
         let p = Paths::from_game_dir(Path::new("/g"));
         assert_eq!(p.plugins_dir, Path::new("/g/plugins"));
-        assert_eq!(p.data_dir, Path::new("/g/dayz-plugins/data"));
+        assert_eq!(p.data_dir, Path::new("/g/plugin-loader/data"));
         assert_eq!(
             p.plugin_config("vr"),
-            Path::new("/g/dayz-plugins/config/vr.toml")
+            Path::new("/g/plugin-loader/config/vr.toml")
         );
         assert_eq!(
             p.hotkeys_file(),
-            Path::new("/g/dayz-plugins/config/hotkeys.toml")
+            Path::new("/g/plugin-loader/config/hotkeys.toml")
         );
     }
 
