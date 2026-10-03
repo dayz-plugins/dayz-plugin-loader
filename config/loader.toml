@@ -1,0 +1,10 @@
+# Plugin loader settings. Delete a line to get its default back.
+
+# false turns the loader into a plain DXGI forwarder: no plugins, no hotkeys, no console.
+enabled = true
+
+# Plugin file names (without .dll) that are never loaded.
+disabled_plugins = []
+
+# error, warn, info, debug or trace. The game's --loader-log=<level> overrides this.
+log_level = "info"

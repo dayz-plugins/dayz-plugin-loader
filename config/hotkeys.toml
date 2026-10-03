@@ -1,0 +1,8 @@
+# Hotkey overrides, one line per action, named "<plugin>.<action>".
+#
+# Plugins register their own defaults, so this file only needs the ones you want to change.
+# Grammar: f1-f24, a-z, 0-9, numpad0-numpad9, named keys (space, enter, caret, grave, ...),
+# 0x<hex> for a raw virtual key, any of them prefixed with ctrl+, alt+ and shift+, or "none"
+# to unbind. Hotkeys only fire while the game window has focus.
+#
+# hello.greet = "f9"
