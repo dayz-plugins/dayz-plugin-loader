@@ -85,6 +85,13 @@ pub struct PluginCallbacks {
     /// Not called when the plugin faulted: a plugin whose callback just crashed is not asked
     /// to run more code.
     pub on_disable: Option<unsafe extern "C" fn(ctx: *mut c_void)>,
+
+    /// Fill the body of one registered panel. `panel` is the qualified name, `frame` is the
+    /// token every `ui_*` host function takes and is only valid for this call.
+    ///
+    /// Called once per frame per open panel, from the loader's render path, so it must be
+    /// short and must not block. A token kept past the call is refused, not dereferenced.
+    pub on_ui: Option<unsafe extern "C" fn(ctx: *mut c_void, panel: Str, frame: u64)>,
 }
 
 impl PluginCallbacks {
@@ -104,6 +111,7 @@ impl PluginCallbacks {
             on_event: None,
             on_enable: None,
             on_disable: None,
+            on_ui: None,
         }
     }
 }

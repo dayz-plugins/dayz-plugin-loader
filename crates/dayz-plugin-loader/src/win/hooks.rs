@@ -19,7 +19,7 @@ use windows::Win32::Graphics::Dxgi::{
     IDXGIFactory, IDXGIFactory2, IDXGISwapChain, DXGI_SWAP_CHAIN_DESC, DXGI_SWAP_CHAIN_DESC1,
 };
 
-use super::{dispatch, state, vtable};
+use super::{dispatch, state, ui, vtable};
 
 /// Vtable slot numbers, counted from the start of the interface's vtable.
 mod slot {
@@ -180,6 +180,7 @@ fn hook_swapchain(raw: *mut c_void) {
 /// Announce a new swapchain to the plugins.
 fn announce(raw: *mut c_void, hwnd: *mut c_void, width: u32, height: u32) {
     super::set_game_window(hwnd);
+    ui::on_swapchain(hwnd);
     let device = device_of(raw);
     let info = SwapchainInfo {
         struct_size: core::mem::size_of::<SwapchainInfo>(),
@@ -293,6 +294,8 @@ unsafe extern "system" fn present(this: *mut c_void, sync_interval: u32, flags: 
         flags,
     };
     dispatch::present(&info);
+    // Last, so the overlay draws over whatever the plugins drew this frame.
+    ui::present(this);
     // SAFETY: forwarding the caller's arguments to the original function.
     unsafe { real(this, sync_interval, flags) }
 }

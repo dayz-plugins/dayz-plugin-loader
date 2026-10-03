@@ -4,6 +4,7 @@ use dayz_plugin_api::StopReason;
 
 use crate::deps::Dependency;
 use crate::host::{Host, PluginError, PluginRef};
+use crate::ui::Ui;
 
 /// The game's swapchain, as handed to [`Plugin::on_swapchain`].
 #[derive(Debug, Clone, Copy)]
@@ -112,6 +113,14 @@ pub trait Plugin: Sized + Send + Sync + 'static {
     ) -> Result<Option<Vec<u8>>, PluginError> {
         Err(PluginError::Unsupported)
     }
+
+    /// Fill the body of one of this plugin's panels. `panel` is the qualified
+    /// `<plugin>.<name>`, so one implementation can serve several panels.
+    ///
+    /// Called once per frame per open panel, on the render thread, with the loader's own
+    /// window and layout around it. Keep it short and do not block: this runs between the
+    /// game's last draw call and its `Present`.
+    fn on_ui(&self, _host: &Host, _ui: &Ui, _panel: &str) {}
 
     /// A subscribed broadcast topic was published.
     fn on_event(&self, _host: &Host, _from: PluginRef, _topic: &str, _payload: &[u8]) {}

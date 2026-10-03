@@ -33,12 +33,14 @@ mod host;
 mod logger;
 mod plugin;
 mod settings;
+mod ui;
 
 pub use dayz_plugin_api as api;
 pub use deps::Dependency;
 pub use host::{Arg, CommandLine, Hook, Host, PluginError, PluginRef};
 pub use plugin::{Plugin, PresentInfo, SwapchainInfo};
 pub use settings::{Setting, SettingKind};
+pub use ui::Ui;
 
 // Used by the macro expansion; not part of the public surface.
 #[doc(hidden)]

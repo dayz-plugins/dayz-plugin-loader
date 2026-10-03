@@ -1,10 +1,10 @@
-//! Example plugin: counts frames, greets on a hotkey, exposes a setting and a command, and
-//! shows what each lifecycle callback is for.
+//! Example plugin: counts frames, greets on a hotkey, exposes a setting, a command and a UI
+//! panel, and shows what each lifecycle callback is for.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use dayz_plugin_sdk::api::StopReason;
-use dayz_plugin_sdk::{export_plugin, Host, Plugin, PluginError, PresentInfo, Setting};
+use dayz_plugin_sdk::{export_plugin, Host, Plugin, PluginError, PresentInfo, Setting, Ui};
 
 struct Hello {
     frames: AtomicU64,
@@ -28,6 +28,9 @@ impl Plugin for Hello {
             "Print the greeting with an optional name.",
             "[name]",
         )?;
+        // The loader owns the window, the layout and the device; this plugin only fills the
+        // body in `on_ui`. F10 toggles it, and the user can rebind that in hotkeys.toml.
+        host.panel("demo", "Hello plugin", false, "f10")?;
         log::info!("started in {}", host.game_dir());
         Ok(Hello {
             frames: AtomicU64::new(0),
@@ -62,6 +65,27 @@ impl Plugin for Hello {
         };
         host.console_print(&line);
         Ok(())
+    }
+
+    fn on_ui(&self, host: &Host, ui: &Ui, _panel: &str) {
+        ui.heading("Hello plugin");
+        ui.label(&format!(
+            "{} frames presented",
+            self.frames.load(Ordering::Relaxed)
+        ));
+        ui.separator();
+        // Both settings, drawn as the right control for their type and written back through
+        // the loader: validated, saved to hello.toml and `on_setting_changed` fired, exactly
+        // as if they had been typed into the console.
+        let _ = ui.setting("greeting");
+        let _ = ui.setting("log_frames");
+        ui.separator();
+        if ui.button("Print the greeting") {
+            host.console_print(&host.get("greeting").unwrap_or_default());
+        }
+        if ui.button("Reset the frame counter") {
+            self.frames.store(0, Ordering::Relaxed);
+        }
     }
 
     fn on_setting_changed(&self, _host: &Host, key: &str, value: &str) {

@@ -79,6 +79,24 @@ pub(crate) fn resize(width: u32, height: u32) {
     }
 }
 
+/// Let a plugin fill one panel body. `token` is only valid for the length of this call.
+pub(crate) fn ui(handle: PluginHandle, panel: &str, token: u64) {
+    let Some(plugin) = plugins::find(handle) else {
+        return;
+    };
+    let Some(cb) = plugin.callbacks.on_ui else {
+        return;
+    };
+    if !plugin.is_enabled() {
+        return;
+    }
+    let ctx = plugin.callbacks.ctx;
+    // SAFETY: `panel` outlives the call; `ctx` is the plugin's own context.
+    to_plugin(plugin, "on_ui", || unsafe {
+        cb(ctx, Str::new(panel), token);
+    });
+}
+
 /// A hotkey fired. `action` is the qualified `<plugin>.<action>` name.
 pub(crate) fn hotkey(action: &str) {
     let Some((name, bare)) = action.split_once('.') else {

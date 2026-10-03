@@ -129,6 +129,14 @@ impl Host {
         Host { api, handle }
     }
 
+    pub(crate) fn api(&self) -> &'static HostApi {
+        self.api
+    }
+
+    pub(crate) fn handle(&self) -> PluginHandle {
+        self.handle
+    }
+
     /// This plugin's handle as seen by other plugins.
     #[must_use]
     pub fn me(&self) -> PluginRef {
@@ -384,6 +392,57 @@ impl Host {
         };
         check(status)?;
         Ok(reply)
+    }
+
+    /// Register a UI panel. Only during `start`.
+    ///
+    /// The loader draws the window, remembers whether it is open and calls
+    /// [`Plugin::on_ui`](crate::Plugin::on_ui) to fill the body. `binding` is a key in the
+    /// loader's grammar that toggles the panel, or `""` for none; the loader handles that key
+    /// itself, so it never reaches `on_hotkey`.
+    ///
+    /// # Errors
+    /// Called outside `start`, a name that is not `[a-z0-9_]+`, or a duplicate.
+    pub fn panel(
+        &self,
+        name: &str,
+        title: &str,
+        default_open: bool,
+        binding: &str,
+    ) -> Result<(), PluginError> {
+        let desc = dayz_plugin_api::PanelDesc {
+            struct_size: core::mem::size_of::<dayz_plugin_api::PanelDesc>(),
+            name: Str::new(name),
+            title: Str::new(title),
+            default_open,
+            default_binding: Str::new(binding),
+        };
+        // SAFETY: the descriptor and the strings it points at outlive the call.
+        check(unsafe { (self.api.panel_register)(self.api.host, self.handle, &raw const desc) })
+    }
+
+    /// Open or close one of this plugin's panels.
+    ///
+    /// # Errors
+    /// No panel of that name.
+    pub fn set_panel_open(&self, name: &str, open: bool) -> Result<(), PluginError> {
+        // SAFETY: `name` outlives the call.
+        check(unsafe {
+            (self.api.panel_set_open)(self.api.host, self.handle, Str::new(name), open)
+        })
+    }
+
+    /// Whether one of this plugin's panels is currently open.
+    ///
+    /// # Errors
+    /// No panel of that name.
+    pub fn panel_is_open(&self, name: &str) -> Result<bool, PluginError> {
+        let mut open = false;
+        // SAFETY: `name` outlives the call; `open` is a valid out-pointer.
+        check(unsafe {
+            (self.api.panel_is_open)(self.api.host, self.handle, Str::new(name), &raw mut open)
+        })?;
+        Ok(open)
     }
 
     /// Subscribe to a broadcast topic. Only during `start`.

@@ -246,6 +246,90 @@ pub struct HotkeyDesc {
     pub default_binding: Str,
 }
 
+/// Which widget [`HostApi::ui_widget`](crate::HostApi::ui_widget) adds.
+///
+/// One entry point rather than one function per widget: the set grows often, and a new
+/// variant costs a plugin that does not know it nothing, while a new function in the table
+/// would be a new ABI version every time.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum UiWidget {
+    /// A line of text. Uses `text`.
+    Label = 0,
+    /// A bigger line of text. Uses `text`.
+    Heading = 1,
+    /// A horizontal rule. Ignores everything.
+    Separator = 2,
+    /// Vertical space of `value.float` points, or a default when it is zero.
+    Space = 3,
+    /// A button. Sets `value.boolean` to whether it was clicked this frame.
+    Button = 4,
+    /// A checkbox. Reads and writes `value.boolean`.
+    Checkbox = 5,
+    /// A slider over `value.float`, bounded by `value.min` and `value.max`.
+    Slider = 6,
+    /// A slider over `value.integer`, bounded by `value.min` and `value.max` rounded.
+    SliderInt = 7,
+    /// The right control for one of this plugin's registered settings, named by `text`
+    /// (`key` or `<plugin>.<key>`). The loader reads the descriptor, draws the matching
+    /// widget, validates and persists the change and fires `on_setting_changed`. Ignores
+    /// `value`.
+    Setting = 8,
+}
+
+/// The value a widget reads, writes, or both. Fields a widget does not use are ignored.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct UiValue {
+    /// `size_of::<UiValue>()`.
+    pub struct_size: usize,
+    /// Boolean in and out: a checkbox's state, a button's "was clicked".
+    pub boolean: bool,
+    /// Float in and out.
+    pub float: f32,
+    /// Integer in and out.
+    pub integer: i64,
+    /// Lower bound for the slider widgets.
+    pub min: f64,
+    /// Upper bound for the slider widgets.
+    pub max: f64,
+}
+
+impl UiValue {
+    /// A zeroed value carrying its own size.
+    #[must_use]
+    pub fn new() -> Self {
+        UiValue {
+            struct_size: core::mem::size_of::<UiValue>(),
+            ..UiValue::default()
+        }
+    }
+}
+
+/// A UI panel a plugin registers during start.
+///
+/// The loader owns the window chrome, the open and closed state and the layout; the plugin
+/// only fills the body, in its `on_ui` callback. That split is what lets the same panel be a
+/// flat overlay now and a world-space quad in VR later without the plugin changing.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct PanelDesc {
+    /// `size_of::<PanelDesc>()`.
+    pub struct_size: usize,
+    /// Panel name within the plugin namespace, `[a-z0-9_]+`. Qualified name is
+    /// `<plugin>.<name>`, which is also what `on_ui` receives.
+    pub name: Str,
+    /// Window title.
+    pub title: Str,
+    /// Whether the panel starts open.
+    pub default_open: bool,
+    /// Binding that toggles the panel, in loader key grammar, or empty for none. The loader
+    /// registers it as the hotkey action `<plugin>.<name>`, so the user can rebind it in
+    /// `hotkeys.toml` like any other.
+    pub default_binding: Str,
+}
+
 /// A console command a plugin registers during start.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]

@@ -17,6 +17,7 @@ mod input;
 mod lifecycle;
 mod plugin_hooks;
 mod plugins;
+mod ui;
 mod vtable;
 
 use core::ffi::c_void;
@@ -142,6 +143,9 @@ fn init() -> bool {
     guard.phase = Phase::Running;
     guard.symbol_lines = data::console_lines;
     guard.hook_lines = plugin_hooks::console_lines;
+    // The loader's own overlay actions. `caret` is the key under Escape on a German
+    // keyboard; `hotkeys.toml` renames it for everyone else.
+    guard.register_loader_hotkey("console", "Show the in-game console", "caret");
     for entry in guard.hotkeys.iter() {
         let binding = entry
             .chord
@@ -163,9 +167,10 @@ pub(crate) fn set_game_window(hwnd: *mut c_void) {
 
 /// Once-per-frame work: poll hotkeys while the game window has focus.
 ///
-/// Polling is the only option here. Hotkeys deliberately do not use `RegisterHotKey`, whose
-/// grabs are global, and the loader has no window of its own to receive keyboard messages;
-/// subclassing the game's window would fight the engine's own input handling.
+/// Polling rather than messages: hotkeys deliberately do not use `RegisterHotKey`, whose
+/// grabs are global, and they must keep working while the overlay is swallowing the game's
+/// window messages, which `GetAsyncKeyState` does because it reads physical key state. The
+/// overlay's own input comes from the window subclass in `ui::wnd` instead.
 pub(crate) fn tick(_swapchain: *mut c_void) {
     let focused = input::is_focused(GAME_WINDOW.load(Ordering::Relaxed));
     let fired = {
@@ -179,7 +184,40 @@ pub(crate) fn tick(_swapchain: *mut c_void) {
     };
     for action in fired {
         log::debug!("hotkey {action}");
+        if handled_by_loader(&action) {
+            continue;
+        }
         dispatch::hotkey(&action);
+    }
+}
+
+/// Whether the loader itself answers this hotkey rather than a plugin.
+///
+/// Two cases: its own `loader.*` actions, and the action a plugin's panel registered, which
+/// toggles that panel. A plugin never sees either, so a panel's key cannot also be swallowed
+/// by the plugin's own `on_hotkey`.
+fn handled_by_loader(action: &str) -> bool {
+    let Some((owner, name)) = action.split_once('.') else {
+        return false;
+    };
+    if owner == "loader" {
+        if name == "console" {
+            ui::toggle_console();
+        }
+        return true;
+    }
+    let toggled = {
+        let mut guard = state();
+        let handle = guard.find_plugin(owner);
+        handle.and_then(|handle| guard.toggle_panel(handle, name))
+    };
+    match toggled {
+        Some(open) => {
+            log::debug!("panel {action} {}", if open { "opened" } else { "closed" });
+            ui::opened();
+            true
+        }
+        None => false,
     }
 }
 

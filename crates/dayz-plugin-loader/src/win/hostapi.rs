@@ -8,8 +8,9 @@
 use core::ffi::c_void;
 
 use dayz_plugin_api::{
-    ArgEntry, Bytes, CommandDesc, EnvEntry, HostApi, HotkeyDesc, LineFn, LogLevel, PluginHandle,
-    ReplyFn, SettingDesc, SettingFlags, SettingKind, Status, Str, API_VERSION,
+    ArgEntry, Bytes, CommandDesc, EnvEntry, HostApi, HotkeyDesc, LineFn, LogLevel, PanelDesc,
+    PluginHandle, ReplyFn, SettingDesc, SettingFlags, SettingKind, Status, Str, UiValue, UiWidget,
+    API_VERSION,
 };
 use dayz_plugin_core::settings;
 
@@ -105,6 +106,10 @@ pub(crate) fn build(game_dir: &str, config_dir: &str, process: &Process) -> &'st
         hook_vtable,
         hook_detour,
         hook_remove,
+        panel_register,
+        panel_set_open,
+        panel_is_open,
+        ui_widget,
         console_capture,
     }))
 }
@@ -508,4 +513,85 @@ unsafe extern "C" fn console_capture(
         }
     }
     status
+}
+
+unsafe extern "C" fn panel_register(
+    _host: *mut c_void,
+    plugin: PluginHandle,
+    desc: *const PanelDesc,
+) -> Status {
+    if desc.is_null() {
+        return Status::InvalidArgument;
+    }
+    // SAFETY: checked non-null; the ABI requires a valid descriptor.
+    let d = unsafe { &*desc };
+    if d.struct_size < core::mem::size_of::<PanelDesc>() {
+        return Status::Unsupported;
+    }
+    let (name, title, binding) = (text(d.name), text(d.title), text(d.default_binding));
+    let mut guard = state();
+    if let Err(e) = guard.register_panel(plugin, &name, &title, d.default_open) {
+        return e;
+    }
+    // A panel's key toggles the panel, which the loader does itself; the plugin never sees
+    // the action. Registering it here means it is listed and rebindable like any other.
+    if !binding.is_empty() {
+        if let Err(e) = guard.register_hotkey(plugin, &name, &title, &binding) {
+            log::warn!("panel {name}: no hotkey ({e:?})");
+        }
+    }
+    drop(guard);
+    super::ui::refresh();
+    Status::Ok
+}
+
+unsafe extern "C" fn panel_set_open(
+    _host: *mut c_void,
+    plugin: PluginHandle,
+    name: Str,
+    open: bool,
+) -> Status {
+    let found = state().set_panel_open(plugin, &text(name), open);
+    if !found {
+        return Status::NotFound;
+    }
+    super::ui::refresh();
+    Status::Ok
+}
+
+unsafe extern "C" fn panel_is_open(
+    _host: *mut c_void,
+    plugin: PluginHandle,
+    name: Str,
+    out: *mut bool,
+) -> Status {
+    if out.is_null() {
+        return Status::InvalidArgument;
+    }
+    let Some(open) = state().panel_open(plugin, &text(name)) else {
+        return Status::NotFound;
+    };
+    // SAFETY: checked non-null; the ABI requires a writable out-param.
+    unsafe { out.write(open) };
+    Status::Ok
+}
+
+unsafe extern "C" fn ui_widget(
+    _host: *mut c_void,
+    plugin: PluginHandle,
+    frame: u64,
+    kind: UiWidget,
+    text_arg: Str,
+    value: *mut UiValue,
+) -> Status {
+    // SAFETY: the ABI requires `value` to be either null or a writable `UiValue` for the
+    // duration of the call; a struct older than this loader's is refused rather than read.
+    let value = unsafe { value.as_mut() };
+    if value
+        .as_ref()
+        .is_some_and(|v| v.struct_size < core::mem::size_of::<UiValue>())
+    {
+        return Status::Unsupported;
+    }
+    super::ui::widget(plugin, frame, kind, &text(text_arg), value)
 }

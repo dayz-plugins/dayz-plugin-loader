@@ -21,6 +21,18 @@ pub struct CommandInfo {
     pub usage: String,
 }
 
+/// A UI panel a plugin registered. The loader owns the window and this state; the plugin
+/// only fills the body.
+#[derive(Debug, Clone)]
+pub struct Panel {
+    /// Unqualified name, which is also the hotkey action when one was requested.
+    pub name: String,
+    /// Window title.
+    pub title: String,
+    /// Whether the window is currently shown.
+    pub open: bool,
+}
+
 /// Everything the loader tracks about one plugin DLL.
 #[derive(Debug)]
 pub struct PluginRecord {
@@ -38,6 +50,8 @@ pub struct PluginRecord {
     pub commands: BTreeMap<String, CommandInfo>,
     /// Dependencies the plugin declared, one display line each.
     pub dependencies: Vec<String>,
+    /// UI panels by unqualified name, in registration order.
+    pub panels: Vec<Panel>,
     /// Start returned success and no fault happened since.
     pub enabled: bool,
 }
@@ -158,6 +172,7 @@ impl State {
             subscriptions: BTreeSet::new(),
             commands: BTreeMap::new(),
             dependencies: Vec::new(),
+            panels: Vec::new(),
             enabled: false,
         });
         Ok(PluginHandle(
@@ -401,6 +416,109 @@ impl State {
     pub fn set_enabled(&mut self, plugin: PluginHandle, enabled: bool) {
         if let Some(record) = self.plugin_mut(plugin) {
             record.enabled = enabled;
+        }
+    }
+
+    /// The descriptor of a setting, for a UI that has to pick a widget for it.
+    pub fn setting_desc(&self, caller: Option<PluginHandle>, name: &str) -> Option<settings::Desc> {
+        let (handle, key) = self.resolve(caller, name)?;
+        self.plugin(handle)?.settings.desc(&key).cloned()
+    }
+
+    /// Register a UI panel for the plugin currently starting. Returns the qualified name.
+    pub fn register_panel(
+        &mut self,
+        plugin: PluginHandle,
+        name: &str,
+        title: &str,
+        default_open: bool,
+    ) -> Result<String, Status> {
+        self.require_starting(plugin)?;
+        names::action_name(name).map_err(|_| Status::InvalidArgument)?;
+        let record = self.plugin_mut(plugin).ok_or(Status::NotFound)?;
+        if record.panels.iter().any(|p| p.name == name) {
+            return Err(Status::AlreadyExists);
+        }
+        record.panels.push(Panel {
+            name: name.to_owned(),
+            title: title.to_owned(),
+            open: default_open,
+        });
+        Ok(format!("{}.{name}", record.name))
+    }
+
+    /// Open or close one panel of one plugin. Returns whether it exists.
+    pub fn set_panel_open(&mut self, plugin: PluginHandle, name: &str, open: bool) -> bool {
+        let Some(record) = self.plugin_mut(plugin) else {
+            return false;
+        };
+        match record.panels.iter_mut().find(|p| p.name == name) {
+            Some(panel) => {
+                panel.open = open;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Flip one panel open or closed. Returns the new state, or `None` if it does not exist.
+    pub fn toggle_panel(&mut self, plugin: PluginHandle, name: &str) -> Option<bool> {
+        let record = self.plugin_mut(plugin)?;
+        let panel = record.panels.iter_mut().find(|p| p.name == name)?;
+        panel.open = !panel.open;
+        Some(panel.open)
+    }
+
+    /// Whether one panel of one plugin is open.
+    pub fn panel_open(&self, plugin: PluginHandle, name: &str) -> Option<bool> {
+        let record = self.plugin(plugin)?;
+        record
+            .panels
+            .iter()
+            .find(|p| p.name == name)
+            .map(|p| p.open)
+    }
+
+    /// Every panel of every running plugin: owner, plugin name, panel name, title, open.
+    ///
+    /// Taken as a snapshot so the overlay can draw without holding the state lock, which it
+    /// must not do: filling a panel body calls into the plugin.
+    pub fn panel_list(&self) -> Vec<(PluginHandle, String, String, String, bool)> {
+        self.plugins
+            .iter()
+            .enumerate()
+            .filter(|(_, record)| record.enabled)
+            .flat_map(|(index, record)| {
+                let handle = PluginHandle(u32::try_from(index + 1).unwrap_or(0));
+                record.panels.iter().map(move |panel| {
+                    (
+                        handle,
+                        record.name.clone(),
+                        panel.name.clone(),
+                        panel.title.clone(),
+                        panel.open,
+                    )
+                })
+            })
+            .collect()
+    }
+
+    /// Register a hotkey the loader itself handles, named `loader.<action>`.
+    ///
+    /// Plugin hotkeys go through [`State::register_hotkey`], which refuses anything outside a
+    /// plugin's `start`. The loader has no such phase, and its own actions must still appear
+    /// in `hotkeys.toml` and the hotkey listing like everyone else's.
+    pub fn register_loader_hotkey(&mut self, action: &str, title: &str, default: &str) {
+        let name = format!("loader.{action}");
+        match self
+            .hotkeys
+            .register(&name, title, default, &self.hotkey_overrides)
+        {
+            Ok(None) => {}
+            Ok(Some(bad_override)) => {
+                log::warn!("hotkeys.toml: {name}: {bad_override}; using default {default:?}");
+            }
+            Err(e) => log::error!("{e}"),
         }
     }
 

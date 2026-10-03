@@ -25,6 +25,9 @@ The loader gives every plugin:
   address of its own and a game update is a data change rather than a release of everything.
 - **Hooks the loader owns**: byte patches, virtual table slots and inline detours registered
   through the host, so they are undone when the plugin stops, faults or the game exits.
+- **An in-game overlay**: the loader owns `egui` and a Direct3D 11 renderer, so a plugin
+  registers a panel and fills its body with widgets through the ABI, without ever touching the
+  device. The loader's own console is drawn with it.
 - **Isolation**: every call into a plugin is wrapped against panics and hardware faults. A
   plugin that faults is logged and disabled; the other plugins and the game keep running.
 
@@ -179,6 +182,46 @@ restart the game; `plugin load` is for a DLL this session has not seen.
 | `stop(Exit)` | The process is going away; do the least that is correct. |
 | `stop(StartFailed)` | `start` failed partway and the loader is undoing it. |
 
+### Panels
+
+A plugin shows a window by registering a panel and filling its body once per frame. It never
+links a UI library and never sees the device:
+
+```rust
+fn start(host: Host) -> Result<Self, PluginError> {
+    host.panel("demo", "Hello plugin", false, "f10")?;   // "" for no key
+    Ok(Hello)
+}
+
+fn on_ui(&self, host: &Host, ui: &Ui, _panel: &str) {
+    ui.heading("Hello plugin");
+    ui.label(&format!("{} frames", self.frames.load(Ordering::Relaxed)));
+    ui.separator();
+    let _ = ui.setting("greeting");       // the right control for a registered setting
+    let _ = ui.setting("log_frames");
+    if ui.button("Print the greeting") {
+        host.console_print(&host.get("greeting").unwrap_or_default());
+    }
+}
+```
+
+`ui.setting(key)` is the one worth knowing: the loader reads the descriptor, draws the control
+that fits the type, and writes a change back through the same path the console's `set` takes —
+validated, persisted and `on_setting_changed` fired. A settings panel needs no state in the
+plugin.
+
+The loader owns the window chrome, the open and closed state, the layout and the hotkey that
+toggles the panel; the key never reaches `on_hotkey`. `host.set_panel_open` and
+`host.panel_is_open` are there for a plugin that wants to drive its own window.
+
+The widget token (`Ui`) is a number, not a pointer, and is only valid inside the `on_ui` call
+that handed it over; keeping it gets a `WrongPhase`, not a dangling dereference. `on_ui` runs
+on the render thread between the game's last draw call and its `Present`, so it must be short.
+
+The loader's own console is drawn through the same machinery. `--console` still opens a
+Windows console window; the key under Escape (`caret` by default, rebindable as
+`loader.console` in `hotkeys.toml`) opens the same console inside the game.
+
 ### Answering for the console
 
 `host.console_exec` runs a line; its output goes to the console window and the log. A plugin
@@ -221,12 +264,13 @@ Build it as a `cdylib` for `x86_64-pc-windows-msvc` and drop the DLL into
 A plugin in another language only needs the three exports and the structs from
 `crates/dayz-plugin-api`; nothing in the ABI is Rust specific.
 
-The ABI carries a version (`API_VERSION`, currently 3) and every struct its own `struct_size`,
+The ABI carries a version (`API_VERSION`, currently 4) and every struct its own `struct_size`,
 so the loader refuses a plugin built against a different version rather than reading a shorter
 table. Fields are only ever appended; a version bump means an existing field changed meaning.
 Version 2 added dependencies and the lifecycle callbacks, version 3 the hook registry and
-`console_capture`. A plugin and the loader it runs in must come from the same version, which
-in practice means rebuilding plugins when the loader's ABI moves.
+`console_capture`, version 4 the UI panels and `on_ui`. A plugin and the loader it runs in
+must come from the same version, which in practice means rebuilding plugins when the loader's
+ABI moves.
 
 ## Game addresses
 

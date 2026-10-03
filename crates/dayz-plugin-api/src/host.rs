@@ -3,8 +3,8 @@
 use core::ffi::c_void;
 
 use crate::types::{
-    ArgEntry, Bytes, CommandDesc, EnvEntry, HotkeyDesc, LogLevel, PluginHandle, SettingDesc,
-    Status, Str,
+    ArgEntry, Bytes, CommandDesc, EnvEntry, HotkeyDesc, LogLevel, PanelDesc, PluginHandle,
+    SettingDesc, Status, Str, UiValue, UiWidget,
 };
 
 /// Callback a message receiver uses to answer synchronously.
@@ -205,6 +205,45 @@ pub struct HostApi {
     /// Returns [`Status::NotFound`] for an unknown id or one belonging to another plugin.
     pub hook_remove:
         unsafe extern "C" fn(host: *mut c_void, plugin: PluginHandle, id: u64) -> Status,
+
+    /// Register a UI panel. Only during `start`.
+    ///
+    /// The loader draws the window and remembers whether it is open; the plugin fills the
+    /// body in [`PluginCallbacks::on_ui`](crate::PluginCallbacks::on_ui).
+    pub panel_register: unsafe extern "C" fn(
+        host: *mut c_void,
+        plugin: PluginHandle,
+        desc: *const PanelDesc,
+    ) -> Status,
+    /// Open or close one of the plugin's own panels.
+    pub panel_set_open: unsafe extern "C" fn(
+        host: *mut c_void,
+        plugin: PluginHandle,
+        name: Str,
+        open: bool,
+    ) -> Status,
+    /// Whether one of the plugin's own panels is currently open.
+    pub panel_is_open: unsafe extern "C" fn(
+        host: *mut c_void,
+        plugin: PluginHandle,
+        name: Str,
+        out: *mut bool,
+    ) -> Status,
+
+    /// Add a widget to the panel body being filled.
+    ///
+    /// `frame` is the token from `on_ui` and is rejected with [`Status::WrongPhase`] outside
+    /// that call, including from another thread; nothing is dereferenced in that case.
+    /// `kind` selects the widget, `text` is its label, and `value` carries the widget's
+    /// value in and out where it has one. Unused fields are ignored.
+    pub ui_widget: unsafe extern "C" fn(
+        host: *mut c_void,
+        plugin: PluginHandle,
+        frame: u64,
+        kind: UiWidget,
+        text: Str,
+        value: *mut UiValue,
+    ) -> Status,
 
     /// Run a console line and receive what it printed, line by line, before returning.
     ///

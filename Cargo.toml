@@ -27,6 +27,11 @@ dayz-plugin-sdk = { path = "crates/dayz-plugin-sdk" }
 dayz-plugin-core = { path = "crates/dayz-plugin-core" }
 log = "0.4"
 thiserror = "2"
+# The overlay. egui is pure Rust (no C or C++ in the tree, which matters for the clang-cl
+# cross build) and emits surface-independent meshes, which is what lets the same plugin UI be
+# rasterised to a VR quad later. `egui-directx11` pins egui 0.35, hence the exact version.
+egui = { version = "0.35", default-features = false }
+egui-directx11 = "0.13"
 toml = "0.9"
 serde = { version = "1", features = ["derive"] }
 
