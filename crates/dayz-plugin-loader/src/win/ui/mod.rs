@@ -79,6 +79,11 @@ pub(crate) fn on_swapchain(hwnd: *mut c_void) {
 }
 
 /// Open or close the loader's console panel.
+/// Key presses the game window received since the last call, as `(scan code, virtual key)`.
+pub(crate) fn key_presses() -> Vec<(u16, u16)> {
+    wnd::take_presses()
+}
+
 pub(crate) fn toggle_console() {
     let open = !CONSOLE_OPEN.load(Ordering::Relaxed);
     CONSOLE_OPEN.store(open, Ordering::Relaxed);

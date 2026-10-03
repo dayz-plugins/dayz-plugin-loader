@@ -37,13 +37,13 @@ impl SettingsPanel {
         &mut self,
         ctx: &Context,
         sections: &[EditorSection],
-        pressed: Option<(u16, Modifiers)>,
+        pressed: Option<(u16, u16, Modifiers)>,
         open: &mut bool,
     ) -> Edits {
         let mut edits = Edits::default();
         // A key arriving while recording ends the recording, whichever window has focus.
-        if let (Some(action), Some((vk, modifiers))) = (self.recording.clone(), pressed) {
-            self.finish_recording(&action, vk, modifiers, &mut edits);
+        if let (Some(action), Some((vk, scancode, modifiers))) = (self.recording.clone(), pressed) {
+            self.finish_recording(&action, vk, scancode, modifiers, &mut edits);
         }
         egui::Window::new("Loader settings")
             .default_size([560.0, 420.0])
@@ -153,7 +153,14 @@ impl SettingsPanel {
     }
 
     /// Turn the key that was just pressed into a binding.
-    fn finish_recording(&mut self, action: &str, vk: u16, modifiers: Modifiers, edits: &mut Edits) {
+    fn finish_recording(
+        &mut self,
+        action: &str,
+        vk: u16,
+        scancode: u16,
+        modifiers: Modifiers,
+        edits: &mut Edits,
+    ) {
         const VK_ESCAPE: u16 = 0x1B;
         const MODIFIER_KEYS: [u16; 9] = [0x10, 0x11, 0x12, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5];
         if MODIFIER_KEYS.contains(&vk) {
@@ -164,14 +171,24 @@ impl SettingsPanel {
         if vk == VK_ESCAPE {
             return;
         }
-        edits.bindings.push((
-            action.to_owned(),
-            Some(Chord {
+        // A key the grammar can spell is recorded by name, which reads well in hotkeys.toml
+        // and follows the label on the key. Anything else — the key under Escape reports
+        // `0xFC` under Wine, which no layout table claims — is recorded by position, so the
+        // binding stays on that key whatever virtual key the layout gives it.
+        let chord = if dayz_plugin_core::keys::has_name(vk) {
+            Chord {
                 vk,
                 scancode: None,
                 modifiers,
-            }),
-        ));
+            }
+        } else {
+            Chord {
+                vk,
+                scancode: Some(scancode),
+                modifiers,
+            }
+        };
+        edits.bindings.push((action.to_owned(), Some(chord)));
     }
 }
 

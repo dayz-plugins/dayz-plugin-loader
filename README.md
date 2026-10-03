@@ -289,6 +289,23 @@ console's `symbols` command lists what resolved and what did not, and the log ca
 same per symbol. `require_symbols` is what makes a game update a named missing symbol in the
 log instead of a crash.
 
+### Looking at what a symbol points at
+
+`read` dumps memory from the console, which is how a candidate symbol gets identified before
+anything is built on it:
+
+```
+read camera.manager              # 64 bytes at the symbol
+read *camera.manager 128         # follow the pointer stored there, then dump 128 bytes
+read *engine.singleton+18 32     # follow, add 0x18, dump 32
+read 0x7ff6c21a4400              # by address, when the symbol has no name yet
+```
+
+Every read is checked before it happens — `VirtualQuery` has to report the page as committed
+and readable, the length is clamped to the end of that region, and the copy still runs inside
+the fault guard, so a page that stops being readable in between prints a line instead of
+taking the game down. Nothing here writes.
+
 The `dayz-data` command inspects and maintains the database:
 
 ```bash

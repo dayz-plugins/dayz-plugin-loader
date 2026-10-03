@@ -214,6 +214,20 @@ pub fn parse(binding: &str) -> Result<Option<Chord>, KeyError> {
     }))
 }
 
+/// Whether [`Chord`]'s own grammar has a name for this virtual key.
+///
+/// The hotkey recorder asks before it writes a binding: a key the grammar can name is worth
+/// recording by name, and anything else is better recorded by position, because a code the
+/// grammar cannot name is one no layout agrees on either.
+#[must_use]
+pub fn has_name(vk: u16) -> bool {
+    (VK_F1..VK_F1 + 24).contains(&vk)
+        || (VK_NUMPAD0..=VK_NUMPAD0 + 9).contains(&vk)
+        || (0x30..=0x39).contains(&vk)
+        || (0x41..=0x5A).contains(&vk)
+        || NAMED.iter().any(|(_, code)| *code == vk)
+}
+
 impl fmt::Display for Chord {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.modifiers.ctrl {
@@ -301,6 +315,16 @@ mod tests {
         };
         assert_eq!(parse("ctrl+shift+r"), Ok(Some(chord)));
         assert_eq!(parse("Shift + Control + R"), Ok(Some(chord)));
+    }
+
+    #[test]
+    fn only_keys_the_grammar_can_spell_have_a_name() {
+        assert!(has_name(0x7B), "f12");
+        assert!(has_name(0x41), "a");
+        assert!(has_name(VK_ESCAPE), "escape");
+        // What Wine reports for the key under Escape on a German layout. Nothing in the
+        // table claims it, so a recorder must fall back to the key's position.
+        assert!(!has_name(0xFC));
     }
 
     #[test]

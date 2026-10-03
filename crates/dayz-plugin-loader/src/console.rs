@@ -82,6 +82,12 @@ pub fn execute(state: &mut State, caller: Option<PluginHandle>, line: &str) -> O
             }
             Outcome::default()
         }
+        Line::Read(target, count) => {
+            for line in (state.read_lines)(&target, count) {
+                state.console_print(line);
+            }
+            Outcome::default()
+        }
         Line::Get(name) | Line::Variable(name, None) => get(state, caller, &name),
         Line::Set(name, value) | Line::Variable(name, Some(value)) => {
             set(state, caller, &name, &value)

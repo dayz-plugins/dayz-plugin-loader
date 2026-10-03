@@ -144,11 +144,19 @@ pub struct State {
     /// Produces the lines the `hooks` command prints. A function pointer for the same reason
     /// as [`State::symbol_lines`]: the hook registry belongs to the platform layer.
     pub hook_lines: fn() -> Vec<String>,
+    /// Produces the lines the `read` command prints, for the same reason as the two above:
+    /// reading the game's memory is the platform layer's business.
+    pub read_lines: fn(&str, Option<usize>) -> Vec<String>,
 }
 
 /// Default for [`State::symbol_lines`]: no database, nothing to print.
 fn no_symbols(_prefix: Option<&str>) -> Vec<String> {
     Vec::new()
+}
+
+/// Default for [`State::read_lines`]: no platform layer, so no memory to read.
+fn no_memory(_target: &str, _count: Option<usize>) -> Vec<String> {
+    vec!["reading memory needs the platform layer".to_owned()]
 }
 
 /// Default for [`State::hook_lines`]: no platform layer, so no hooks.
@@ -177,6 +185,7 @@ impl State {
             console_printed: 0,
             symbol_lines: no_symbols,
             hook_lines: no_hooks,
+            read_lines: no_memory,
         }
     }
 

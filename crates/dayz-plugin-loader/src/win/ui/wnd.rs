@@ -39,8 +39,10 @@ struct Pending {
     pointer: Pos2,
     focused: bool,
     screen: Vec2,
-    /// Virtual key of the most recent key press, for the hotkey recorder.
-    last_key: Option<u16>,
+    /// The most recent key press as `(virtual key, scan code)`, for the hotkey recorder.
+    last_key: Option<(u16, u16)>,
+    /// Key presses since the last tick as `(scan code, virtual key)`, for scan code hotkeys.
+    presses: Vec<(u16, u16)>,
 }
 
 static PENDING: Mutex<Pending> = Mutex::new(Pending {
@@ -50,6 +52,7 @@ static PENDING: Mutex<Pending> = Mutex::new(Pending {
     focused: true,
     screen: Vec2::new(1920.0, 1080.0),
     last_key: None,
+    presses: Vec::new(),
 });
 
 fn pending() -> std::sync::MutexGuard<'static, Pending> {
@@ -98,14 +101,28 @@ pub(crate) fn take_input(screen: Rect, time: f64) -> RawInput {
 ///
 /// The hotkey recorder needs the key itself rather than an egui event: egui has no notion of
 /// `VK_OEM_5`, and a binding must be in the loader's own grammar.
-pub(crate) fn take_last_key() -> Option<(u16, dayz_plugin_core::keys::Modifiers)> {
+pub(crate) fn take_last_key() -> Option<(u16, u16, dayz_plugin_core::keys::Modifiers)> {
     let mut guard = pending();
     let modifiers = dayz_plugin_core::keys::Modifiers {
         ctrl: guard.modifiers.ctrl,
         alt: guard.modifiers.alt,
         shift: guard.modifiers.shift,
     };
-    guard.last_key.take().map(|vk| (vk, modifiers))
+    guard
+        .last_key
+        .take()
+        .map(|(vk, scancode)| (vk, scancode, modifiers))
+}
+
+/// Key presses the window received since the last call, as `(scan code, virtual key)`.
+///
+/// How a binding written as `sc<hex>` fires. The alternative, asking the platform which
+/// virtual key sits at a scan code, is not trustworthy: under Wine `MapVirtualKeyW` answers
+/// `VK_OEM_3` for the key under Escape on a German layout while the key itself arrives as
+/// `0xFC`, so a poll of the mapped code would wait for a press that never comes. The message
+/// carries both halves, and nothing has to be inferred.
+pub(crate) fn take_presses() -> Vec<(u16, u16)> {
+    core::mem::take(&mut pending().presses)
 }
 
 /// Drop everything collected so far.
@@ -212,24 +229,7 @@ fn record(msg: u32, wparam: WPARAM, lparam: LPARAM, capturing: bool) -> bool {
             true
         }
         WM_KEYDOWN | WM_SYSKEYDOWN | WM_KEYUP | WM_SYSKEYUP => {
-            let pressed = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
-            #[allow(clippy::cast_possible_truncation)]
-            let vk = wparam.0 as u16;
-            let mut guard = pending();
-            update_modifiers(&mut guard.modifiers, vk, pressed);
-            if pressed {
-                guard.last_key = Some(vk);
-            }
-            if let Some(key) = key_of(vk) {
-                let modifiers = guard.modifiers;
-                guard.events.push(Event::Key {
-                    key,
-                    physical_key: None,
-                    pressed,
-                    repeat: false,
-                    modifiers,
-                });
-            }
+            keyboard(msg, wparam, lparam);
             true
         }
         WM_CHAR => {
@@ -254,6 +254,38 @@ fn record(msg: u32, wparam: WPARAM, lparam: LPARAM, capturing: bool) -> bool {
             false
         }
         _ => false,
+    }
+}
+
+/// Record one key message: modifier state, the hotkey queues, and the egui event.
+fn keyboard(msg: u32, wparam: WPARAM, lparam: LPARAM) {
+    let pressed = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
+    #[allow(clippy::cast_possible_truncation)]
+    let vk = wparam.0 as u16;
+    // Bits 16..24 of `lparam` are the scan code the keyboard sent, and bit 24 marks the
+    // extended set (the keys the `E0` prefix distinguishes, such as right Alt).
+    #[allow(clippy::cast_sign_loss, reason = "a bit field, not a number")]
+    let bits = lparam.0 as u64;
+    #[allow(clippy::cast_possible_truncation)]
+    let mut scancode = ((bits >> 16) & 0xFF) as u16;
+    if bits & (1 << 24) != 0 {
+        scancode |= 0xE000;
+    }
+    let mut guard = pending();
+    update_modifiers(&mut guard.modifiers, vk, pressed);
+    if pressed {
+        guard.last_key = Some((vk, scancode));
+        guard.presses.push((scancode, vk));
+    }
+    if let Some(key) = key_of(vk) {
+        let modifiers = guard.modifiers;
+        guard.events.push(Event::Key {
+            key,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers,
+        });
     }
 }
 

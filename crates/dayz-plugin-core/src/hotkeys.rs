@@ -107,20 +107,38 @@ impl Registry {
         self.entries.iter()
     }
 
+    /// Actions bound to this physical key, for a key press the platform observed.
+    ///
+    /// Scan code bindings are delivered this way rather than polled. Polling needs a virtual
+    /// key, and asking the platform which virtual key sits at a scan code is not reliable:
+    /// under Wine, `MapVirtualKeyW` answers one code for the key under Escape while the key
+    /// itself arrives carrying another. A press carries both, so there is nothing to guess.
+    pub fn press(&mut self, scancode: u16, modifiers: Modifiers) -> Vec<ActionName> {
+        self.entries
+            .iter()
+            .filter(|entry| {
+                entry.chord.is_some_and(|chord| {
+                    chord.scancode == Some(scancode) && chord.modifiers == modifiers
+                })
+            })
+            .map(|entry| entry.name.clone())
+            .collect()
+    }
+
     /// Compare against the current key state and return the actions whose key went from
     /// up to down with matching modifiers. Call once per frame while the game has focus.
+    ///
+    /// Only the bindings that name a key; the ones that name a position come through
+    /// [`Registry::press`].
     pub fn poll(&mut self, state: &impl KeyState) -> Vec<ActionName> {
         let held = state.modifiers();
         let mut fired = Vec::new();
         for entry in &mut self.entries {
             let Some(chord) = entry.chord else { continue };
-            // A scan code binding is resolved every poll rather than once at registration:
-            // the user may switch keyboard layout while the game runs.
-            let vk = match chord.scancode {
-                Some(scancode) => state.vk_for_scancode(scancode),
-                None => Some(chord.vk),
-            };
-            let now = vk.is_some_and(|vk| state.is_down(vk));
+            if chord.scancode.is_some() {
+                continue;
+            }
+            let now = state.is_down(chord.vk);
             if now && !entry.down && chord.modifiers == held {
                 fired.push(entry.name.clone());
             }

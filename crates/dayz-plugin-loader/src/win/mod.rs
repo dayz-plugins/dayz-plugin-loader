@@ -15,6 +15,7 @@ mod hooks;
 mod hostapi;
 mod input;
 mod lifecycle;
+mod memory;
 mod plugin_hooks;
 mod plugins;
 mod ui;
@@ -145,6 +146,7 @@ fn init() -> bool {
     guard.phase = Phase::Running;
     guard.symbol_lines = data::console_lines;
     guard.hook_lines = plugin_hooks::console_lines;
+    guard.read_lines = memory::console_lines;
     // The loader's own overlay actions. Bound by scan code, not by key name: 0x29 is the key
     // under Escape on every layout, and its virtual key code is a different one on each — the
     // reason binding it by name worked on one keyboard and not on the next.
@@ -209,10 +211,18 @@ pub(crate) fn set_game_window(hwnd: *mut c_void) {
 /// overlay's own input comes from the window subclass in `ui::wnd` instead.
 pub(crate) fn tick(_swapchain: *mut c_void) {
     let focused = input::is_focused(GAME_WINDOW.load(Ordering::Relaxed));
+    // Presses are drained whether or not the game has focus, so a key pressed elsewhere does
+    // not sit in the queue waiting to fire on the way back in.
+    let presses = ui::key_presses();
     let fired = {
         let mut guard = state();
         if focused {
-            guard.hotkeys.poll(&input::AsyncKeys)
+            let mut fired = guard.hotkeys.poll(&input::AsyncKeys);
+            let held = dayz_plugin_core::hotkeys::KeyState::modifiers(&input::AsyncKeys);
+            for (scancode, _vk) in presses {
+                fired.extend(guard.hotkeys.press(scancode, held));
+            }
+            fired
         } else {
             guard.hotkeys.reset();
             Vec::new()

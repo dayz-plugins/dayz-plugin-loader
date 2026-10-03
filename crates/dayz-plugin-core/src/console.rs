@@ -78,6 +78,9 @@ pub enum Line {
     Symbols(Option<String>),
     /// `hooks`: patches, vtable slots and detours plugins installed through the loader.
     Hooks,
+    /// `read <target> [count]`: dump game memory. The target is left as typed, because what
+    /// a symbol name resolves to is the platform layer's business, not the grammar's.
+    Read(String, Option<usize>),
     /// `<plugin.key>` alone prints the value, `<plugin.key> <value>` sets it.
     Variable(String, Option<String>),
     /// `<plugin.command> [args...]`: forwarded to the owning plugin with raw args.
@@ -96,6 +99,9 @@ pub enum ParseError {
     /// `plugin` with no operation, or one that does not exist.
     #[error("usage: plugin <list|deps|load|stop|enable|disable|reload> [name]")]
     PluginUsage,
+    /// `read` without a target, or with a byte count that is not a number.
+    #[error("usage: read [*]<symbol|0xaddress>[+offset] [bytes]")]
+    ReadUsage,
     /// A `plugin` operation that acts on one plugin, without its name.
     #[error("usage: plugin {0} <name>")]
     PluginNeedsName(&'static str),
@@ -139,6 +145,17 @@ pub fn parse(line: &str) -> Result<Line, ParseError> {
         }
         "symbols" | "syms" => Line::Symbols(optional(rest)),
         "hooks" => Line::Hooks,
+        "read" => {
+            let (target, count) = split_word(rest);
+            if target.is_empty() {
+                return Err(ParseError::ReadUsage);
+            }
+            let count = match optional(count) {
+                None => None,
+                Some(text) => Some(text.parse().map_err(|_| ParseError::ReadUsage)?),
+            };
+            Line::Read(target.to_owned(), count)
+        }
         "get" => {
             if rest.is_empty() {
                 return Err(ParseError::NeedsName("get"));
@@ -195,6 +212,10 @@ pub const BUILTIN_HELP: &[(&str, &str)] = &[
         "hooks",
         "List the hooks plugins installed through the loader.",
     ),
+    (
+        "read [*]<symbol|0xaddr>[+off] [bytes]",
+        "Dump game memory; * reads the pointer there first.",
+    ),
     ("get <plugin.key>", "Print a setting."),
     ("set <plugin.key> <value>", "Change a setting."),
     ("<plugin.key> [value]", "Shorthand for get / set."),
@@ -204,6 +225,20 @@ pub const BUILTIN_HELP: &[(&str, &str)] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn read_takes_a_target_and_an_optional_length() {
+        assert_eq!(
+            parse("read camera.manager"),
+            Ok(Line::Read("camera.manager".into(), None))
+        );
+        assert_eq!(
+            parse("read *engine.singleton+18 64"),
+            Ok(Line::Read("*engine.singleton+18".into(), Some(64)))
+        );
+        assert_eq!(parse("read"), Err(ParseError::ReadUsage));
+        assert_eq!(parse("read 0x10 lots"), Err(ParseError::ReadUsage));
+    }
 
     #[test]
     fn blank_and_comments_are_empty() {
