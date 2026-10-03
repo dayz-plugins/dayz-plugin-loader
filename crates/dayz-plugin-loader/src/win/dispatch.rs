@@ -97,6 +97,21 @@ pub(crate) fn ui(handle: PluginHandle, panel: &str, token: u64) {
     });
 }
 
+/// Tell a plugin how its dialog ended.
+pub(crate) fn dialog(handle: PluginHandle, id: u64, answer: api::UiAnswer, text: &str) {
+    let Some(plugin) = plugins::find(handle) else {
+        return;
+    };
+    let Some(cb) = plugin.callbacks.on_dialog else {
+        return;
+    };
+    let ctx = plugin.callbacks.ctx;
+    // SAFETY: `text` outlives the call; `ctx` is the plugin's own context.
+    to_plugin(plugin, "on_dialog", || unsafe {
+        cb(ctx, id, answer, Str::new(text));
+    });
+}
+
 /// A hotkey fired. `action` is the qualified `<plugin>.<action>` name.
 pub(crate) fn hotkey(action: &str) {
     let Some((name, bare)) = action.split_once('.') else {

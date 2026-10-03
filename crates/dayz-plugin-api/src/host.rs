@@ -3,8 +3,8 @@
 use core::ffi::c_void;
 
 use crate::types::{
-    ArgEntry, Bytes, CommandDesc, EnvEntry, HotkeyDesc, LogLevel, PanelDesc, PluginHandle,
-    SettingDesc, Status, Str, UiValue, UiWidget,
+    ArgEntry, Bytes, CommandDesc, DialogDesc, EnvEntry, HotkeyDesc, LogLevel, NoticeDesc,
+    PanelDesc, PluginHandle, SettingDesc, Status, Str, UiValue, UiWidget,
 };
 
 /// Callback a message receiver uses to answer synchronously.
@@ -244,6 +244,34 @@ pub struct HostApi {
         text: Str,
         value: *mut UiValue,
     ) -> Status,
+
+    /// Show a toast or a notice. It takes no input and goes away by itself.
+    ///
+    /// Writes an id to `out_id`, which [`HostApi::ui_close`] takes; `out_id` may be null for
+    /// a message nobody will want to take back.
+    pub notice_show: unsafe extern "C" fn(
+        host: *mut c_void,
+        plugin: PluginHandle,
+        desc: *const NoticeDesc,
+        out_id: *mut u64,
+    ) -> Status,
+
+    /// Open a modal dialog and return its id through `out_id`.
+    ///
+    /// The answer arrives later, in `on_dialog`, because the player answers in their own
+    /// time and nothing in the loader may block a frame waiting for them. A plugin that
+    /// stops with a dialog still open has it closed for it, with [`UiAnswer::Closed`].
+    pub dialog_open: unsafe extern "C" fn(
+        host: *mut c_void,
+        plugin: PluginHandle,
+        desc: *const DialogDesc,
+        out_id: *mut u64,
+    ) -> Status,
+
+    /// Take down one of this plugin's own dialogs, toasts or notices early.
+    ///
+    /// A dialog closed this way answers with [`UiAnswer::Closed`].
+    pub ui_close: unsafe extern "C" fn(host: *mut c_void, plugin: PluginHandle, id: u64) -> Status,
 
     /// Run a console line and receive what it printed, line by line, before returning.
     ///

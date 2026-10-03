@@ -13,6 +13,7 @@ use dayz_plugin_api::{
     Status, StopReason, Str, API_VERSION,
 };
 
+use crate::dialogs::Shown;
 use crate::host::{bytes_from, str_from, Host, PluginError, PluginRef};
 use crate::logger::HostLogger;
 use crate::plugin::{Plugin, PresentInfo, SwapchainInfo};
@@ -151,6 +152,7 @@ pub unsafe fn start<P: Plugin>(
             on_enable: Some(on_enable::<P>),
             on_disable: Some(on_disable::<P>),
             on_ui: Some(on_ui::<P>),
+            on_dialog: Some(on_dialog::<P>),
         });
     }
     Status::Ok
@@ -323,6 +325,20 @@ unsafe extern "C" fn on_ui<P: Plugin>(ctx: *mut c_void, panel: Str, frame: u64) 
     let ui = Ui::new(s.host.api(), s.host.handle(), frame);
     guard(s, "on_ui", |s| {
         s.plugin.on_ui(&s.host, &ui, &panel);
+    });
+}
+
+unsafe extern "C" fn on_dialog<P: Plugin>(
+    ctx: *mut c_void,
+    id: u64,
+    answer: api::UiAnswer,
+    text: Str,
+) {
+    // SAFETY: documented pointer contracts of this callback.
+    let s = unsafe { state::<P>(ctx) };
+    let text = str_from(text);
+    guard(s, "on_dialog", |s| {
+        s.plugin.on_dialog(&s.host, Shown(id), answer, &text);
     });
 }
 

@@ -28,6 +28,7 @@
 //! ```
 
 mod deps;
+mod dialogs;
 mod ffi;
 mod host;
 mod logger;
@@ -37,6 +38,7 @@ mod ui;
 
 pub use dayz_plugin_api as api;
 pub use deps::Dependency;
+pub use dialogs::{Dialog, Notice, Shown};
 pub use host::{Arg, CommandLine, Hook, Host, PluginError, PluginRef};
 pub use plugin::{Plugin, PresentInfo, SwapchainInfo};
 pub use settings::{Setting, SettingKind};

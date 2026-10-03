@@ -445,6 +445,51 @@ impl Host {
         Ok(open)
     }
 
+    /// Put a toast or a notice on screen. It takes no input and goes away by itself.
+    ///
+    /// # Errors
+    /// The loader refused it, which today means only a descriptor it is too old to read.
+    pub fn show(&self, notice: &crate::Notice) -> Result<crate::Shown, PluginError> {
+        let desc = notice.to_api();
+        let mut id = 0u64;
+        // SAFETY: the descriptor and the strings it borrows outlive the call; `id` is a valid
+        // out-pointer.
+        check(unsafe {
+            (self.api.notice_show)(self.api.host, self.handle, &raw const desc, &raw mut id)
+        })?;
+        Ok(crate::Shown(id))
+    }
+
+    /// Open a modal dialog. The answer arrives in
+    /// [`Plugin::on_dialog`](crate::Plugin::on_dialog), never here: the player answers in
+    /// their own time, and a frame may not wait for them.
+    ///
+    /// # Errors
+    /// The loader refused the descriptor.
+    pub fn ask(&self, dialog: &crate::Dialog) -> Result<crate::Shown, PluginError> {
+        let desc = dialog.to_api();
+        let mut id = 0u64;
+        // SAFETY: the descriptor and the strings it borrows outlive the call; `id` is a valid
+        // out-pointer.
+        check(unsafe {
+            (self.api.dialog_open)(self.api.host, self.handle, &raw const desc, &raw mut id)
+        })?;
+        Ok(crate::Shown(id))
+    }
+
+    /// Take one of this plugin's dialogs, toasts or notices down early.
+    ///
+    /// A dialog closed this way still reports to `on_dialog`, with
+    /// [`UiAnswer::Closed`](crate::api::UiAnswer::Closed), so a plugin has exactly one place
+    /// where a dialog ends.
+    ///
+    /// # Errors
+    /// Unknown id, or one belonging to another plugin.
+    pub fn close(&self, shown: crate::Shown) -> Result<(), PluginError> {
+        // SAFETY: the id is a plain number the loader validates itself.
+        check(unsafe { (self.api.ui_close)(self.api.host, self.handle, shown.0) })
+    }
+
     /// Subscribe to a broadcast topic. Only during `start`.
     ///
     /// # Errors

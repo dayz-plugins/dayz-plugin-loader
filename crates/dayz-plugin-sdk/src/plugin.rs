@@ -3,6 +3,7 @@
 use dayz_plugin_api::StopReason;
 
 use crate::deps::Dependency;
+use crate::dialogs::Shown;
 use crate::host::{Host, PluginError, PluginRef};
 use crate::ui::Ui;
 
@@ -121,6 +122,17 @@ pub trait Plugin: Sized + Send + Sync + 'static {
     /// window and layout around it. Keep it short and do not block: this runs between the
     /// game's last draw call and its `Present`.
     fn on_ui(&self, _host: &Host, _ui: &Ui, _panel: &str) {}
+
+    /// A dialog this plugin opened has ended, however it ended. `text` is what was typed in
+    /// an input dialog that was accepted, and empty otherwise.
+    fn on_dialog(
+        &self,
+        _host: &Host,
+        _dialog: Shown,
+        _answer: dayz_plugin_api::UiAnswer,
+        _text: &str,
+    ) {
+    }
 
     /// A subscribed broadcast topic was published.
     fn on_event(&self, _host: &Host, _from: PluginRef, _topic: &str, _payload: &[u8]) {}

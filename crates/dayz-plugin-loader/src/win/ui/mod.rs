@@ -12,6 +12,8 @@
 
 mod console_panel;
 mod frame;
+mod overlays;
+mod paint;
 mod render;
 mod wnd;
 
@@ -24,11 +26,14 @@ use egui::{Context, Pos2, Rect, Vec2};
 use windows::Win32::Graphics::Direct3D11::ID3D11Device;
 
 pub(crate) use frame::widget;
+pub(crate) use overlays::{answer_of, modal_dialog, passing, take_all, take_owned};
 
 use super::{dispatch, state};
 
 /// Whether the overlay currently has the keyboard and mouse.
 static CAPTURING: AtomicBool = AtomicBool::new(false);
+/// Whether there is anything at all to draw. A toast is visible without capturing.
+static VISIBLE: AtomicBool = AtomicBool::new(false);
 /// Whether the loader's own console panel is open.
 static CONSOLE_OPEN: AtomicBool = AtomicBool::new(false);
 /// How many plugin panels are open, so `Present` can leave immediately when none are.
@@ -94,15 +99,22 @@ pub(crate) fn refresh() {
         .filter(|(_, _, _, _, open)| *open)
         .count();
     PANELS_OPEN.store(open, Ordering::Relaxed);
-    CAPTURING.store(
-        open > 0 || CONSOLE_OPEN.load(Ordering::Relaxed),
-        Ordering::Relaxed,
-    );
+    recount();
+}
+
+/// Recompute what is on screen and what has the input.
+///
+/// Split in two because a toast is visible without taking the keyboard: only windows and a
+/// modal dialog capture, everything else merely draws.
+pub(crate) fn recount() {
+    let windows = PANELS_OPEN.load(Ordering::Relaxed) > 0 || CONSOLE_OPEN.load(Ordering::Relaxed);
+    CAPTURING.store(windows || overlays::modal(), Ordering::Relaxed);
+    VISIBLE.store(windows || overlays::any(), Ordering::Relaxed);
 }
 
 /// Draw one frame, from inside the `Present` hook.
 pub(crate) fn present(swapchain: *mut c_void) {
-    if !CAPTURING.load(Ordering::Relaxed) {
+    if !VISIBLE.load(Ordering::Relaxed) {
         return;
     }
     let Some(chain) = render::swapchain_of(swapchain) else {
@@ -208,6 +220,8 @@ impl Overlay {
         }
         let mut submitted = None;
         let mut closed = Vec::new();
+        let queued = overlays::snapshot();
+        let mut painted = paint::Outcome::default();
         let output = ctx.run_ui(input, |ui| {
             let ctx = ui.ctx().clone();
             let mut console_open = CONSOLE_OPEN.load(Ordering::Relaxed);
@@ -234,10 +248,57 @@ impl Overlay {
                     closed.push((*handle, panel.clone()));
                 }
             }
+            painted = paint::draw(&ctx, &queued);
             cursor(&ctx);
         });
+        resolve(&painted);
         (output, submitted, closed)
     }
+}
+
+/// Apply what one frame of toasts, notices and dialogs decided.
+///
+/// Called after the egui pass, never during it: answering a dialog calls into a plugin, and
+/// no plugin is called while a frame body is on the stack.
+fn resolve(painted: &paint::Outcome) {
+    for (id, text) in &painted.typed {
+        overlays::set_input(*id, text);
+    }
+    for (id, answer) in &painted.answered {
+        let Some(entry) = overlays::take(*id) else {
+            continue;
+        };
+        if let Some((owner, id, answer, text)) = overlays::answer_of(&entry, *answer) {
+            dispatch::dialog(owner, id, answer, &text);
+        }
+    }
+    overlays::mark_shown(&painted.shown);
+    recount();
+}
+
+/// Put a toast up on behalf of the loader itself rather than a plugin.
+pub(crate) fn loader_toast(level: dayz_plugin_api::UiLevel, title: &str, text: &str) {
+    overlays::passing(
+        None,
+        dayz_plugin_api::UiNotice::Toast,
+        level,
+        title,
+        text,
+        0.0,
+    );
+    recount();
+}
+
+/// Take down everything a plugin left on screen, telling it about each dialog.
+pub(crate) fn close_all_for(owner: dayz_plugin_api::PluginHandle) {
+    for entry in take_all(owner) {
+        if let Some((owner, id, answer, text)) =
+            overlays::answer_of(&entry, dayz_plugin_api::UiAnswer::Closed)
+        {
+            dispatch::dialog(owner, id, answer, &text);
+        }
+    }
+    recount();
 }
 
 /// Draw the overlay's own pointer.

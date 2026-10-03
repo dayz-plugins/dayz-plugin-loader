@@ -3,7 +3,7 @@
 use core::ffi::c_void;
 
 use crate::host::ReplyFn;
-use crate::types::{Bytes, PluginHandle, Status, Str};
+use crate::types::{Bytes, PluginHandle, Status, Str, UiAnswer};
 
 /// Information about the game's swapchain, passed when it is created or recreated.
 #[repr(C)]
@@ -92,6 +92,11 @@ pub struct PluginCallbacks {
     /// Called once per frame per open panel, from the loader's render path, so it must be
     /// short and must not block. A token kept past the call is refused, not dereferenced.
     pub on_ui: Option<unsafe extern "C" fn(ctx: *mut c_void, panel: Str, frame: u64)>,
+
+    /// A dialog this plugin opened was answered. `text` carries what was typed for an input
+    /// dialog and is empty otherwise.
+    pub on_dialog:
+        Option<unsafe extern "C" fn(ctx: *mut c_void, id: u64, answer: UiAnswer, text: Str)>,
 }
 
 impl PluginCallbacks {
@@ -112,6 +117,7 @@ impl PluginCallbacks {
             on_enable: None,
             on_disable: None,
             on_ui: None,
+            on_dialog: None,
         }
     }
 }

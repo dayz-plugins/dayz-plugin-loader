@@ -23,9 +23,9 @@ mod types;
 pub use callbacks::{PluginCallbacks, PresentInfo, SwapchainInfo};
 pub use host::{HostApi, LineFn, ReplyFn};
 pub use types::{
-    ArgEntry, Bytes, CommandDesc, Dependency, DependencyKind, EnvEntry, HotkeyDesc, LogLevel,
-    PanelDesc, PluginHandle, PluginInfo, SettingDesc, SettingFlags, SettingKind, Status,
-    StopReason, Str, UiValue, UiWidget,
+    ArgEntry, Bytes, CommandDesc, Dependency, DependencyKind, DialogDesc, EnvEntry, HotkeyDesc,
+    LogLevel, NoticeDesc, PanelDesc, PluginHandle, PluginInfo, SettingDesc, SettingFlags,
+    SettingKind, Status, StopReason, Str, UiAnswer, UiDialog, UiLevel, UiNotice, UiValue, UiWidget,
 };
 
 /// Version of this ABI. The loader refuses plugins describing a different major version.
@@ -33,8 +33,10 @@ pub use types::{
 /// 2 added the dependency list to [`PluginInfo`], the enable and disable callbacks, and the
 /// [`StopReason`] argument to the stop export. 3 added the hook registry and
 /// [`HostApi::console_capture`]. 4 added the UI panels: [`PanelDesc`],
-/// [`HostApi::panel_register`], [`HostApi::ui_widget`] and the `on_ui` callback.
-pub const API_VERSION: u32 = 4;
+/// [`HostApi::panel_register`], [`HostApi::ui_widget`] and the `on_ui` callback. 5 added the
+/// toasts, notices and dialogs: [`HostApi::notice_show`], [`HostApi::dialog_open`],
+/// [`HostApi::ui_close`] and the `on_dialog` callback.
+pub const API_VERSION: u32 = 5;
 
 /// Name of the export every plugin must provide: `extern "C" fn() -> *const PluginInfo`.
 pub const DESCRIBE_EXPORT: &str = "dayz_plugin_describe";

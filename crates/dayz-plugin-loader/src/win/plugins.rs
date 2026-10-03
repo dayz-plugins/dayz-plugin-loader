@@ -154,6 +154,9 @@ impl Active {
             }
         }
         super::plugin_hooks::remove_all(self.handle, &self.name);
+        // Same reasoning as the hooks: a window a plugin left on screen must not outlive it,
+        // and a dialog still waiting for an answer is told nobody is coming.
+        super::ui::close_all_for(self.handle);
     }
 }
 

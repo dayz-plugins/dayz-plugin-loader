@@ -246,6 +246,105 @@ pub struct HotkeyDesc {
     pub default_binding: Str,
 }
 
+/// How important a notice is, which decides its colour.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum UiLevel {
+    /// Neutral.
+    #[default]
+    Info = 0,
+    /// Something worked.
+    Success = 1,
+    /// Something needs attention but nothing failed.
+    Warning = 2,
+    /// Something failed.
+    Error = 3,
+}
+
+/// Which kind of passing message [`HostApi::notice_show`](crate::HostApi::notice_show) puts
+/// on screen.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum UiNotice {
+    /// A small card in the corner, stacked under the ones already there. For things the
+    /// player may read and may ignore.
+    Toast = 0,
+    /// Large text in the middle of the screen. For the few things that must be seen.
+    Notice = 1,
+}
+
+/// A toast or a notice. Neither takes input, and both disappear by themselves.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NoticeDesc {
+    /// `size_of::<NoticeDesc>()`.
+    pub struct_size: usize,
+    /// Toast or notice.
+    pub kind: UiNotice,
+    /// Colour and tone.
+    pub level: UiLevel,
+    /// Bold first line, or empty for none.
+    pub title: Str,
+    /// The message.
+    pub text: Str,
+    /// How long it stays, in seconds. Zero means the loader's default.
+    pub seconds: f32,
+}
+
+/// Which kind of dialog [`HostApi::dialog_open`](crate::HostApi::dialog_open) puts up.
+///
+/// All three are modal: while one is open the overlay has the keyboard and mouse, and the
+/// answer arrives in `on_dialog` rather than as a return value, because the player takes as
+/// long as they take.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum UiDialog {
+    /// Text and one button.
+    Message = 0,
+    /// Text, a confirming button and a cancelling one.
+    Confirm = 1,
+    /// Text and one line to type into.
+    Input = 2,
+}
+
+/// How a dialog ended.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum UiAnswer {
+    /// The confirming button, or Enter in an input dialog.
+    Accepted = 0,
+    /// The cancelling button, Escape, or the window's close button.
+    Cancelled = 1,
+    /// The loader took it down: the plugin asked, or the plugin stopped.
+    Closed = 2,
+}
+
+/// A dialog a plugin opens.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct DialogDesc {
+    /// `size_of::<DialogDesc>()`.
+    pub struct_size: usize,
+    /// Which of the three.
+    pub kind: UiDialog,
+    /// Colour and tone.
+    pub level: UiLevel,
+    /// Window title.
+    pub title: Str,
+    /// Body text.
+    pub text: Str,
+    /// Starting content of the input line, for [`UiDialog::Input`].
+    pub default_text: Str,
+    /// Label of the accepting button, or empty for the loader's default.
+    pub accept_label: Str,
+    /// Label of the cancelling button, or empty for the loader's default.
+    pub cancel_label: Str,
+}
+
 /// Which widget [`HostApi::ui_widget`](crate::HostApi::ui_widget) adds.
 ///
 /// One entry point rather than one function per widget: the set grows often, and a new

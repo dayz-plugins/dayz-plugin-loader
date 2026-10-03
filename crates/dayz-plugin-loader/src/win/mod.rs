@@ -157,7 +157,30 @@ fn init() -> bool {
     drop(guard);
     // Last, so a command typed in the first instant cannot race the registries.
     console::start_input();
+    // Queued, not drawn: there is no swapchain yet. It appears on the first frame the game
+    // presents, which is also the first moment anyone could have seen it.
+    ui::loader_toast(
+        dayz_plugin_api::UiLevel::Success,
+        &format!("DayZ Plugin Loader v{} Ready", env!("CARGO_PKG_VERSION")),
+        &plugin_summary(running, &state().plugins),
+    );
     running > 0
+}
+
+/// The toast's second line: which plugins came up, or why none did.
+fn plugin_summary(running: usize, plugins: &[crate::state::PluginRecord]) -> String {
+    if plugins.is_empty() {
+        return "no plugins found".to_owned();
+    }
+    let names: Vec<&str> = plugins
+        .iter()
+        .filter(|p| p.enabled)
+        .map(|p| p.name.as_str())
+        .collect();
+    if names.is_empty() {
+        return format!("{} plugins found, none running", plugins.len());
+    }
+    format!("{running} running: {}", names.join(", "))
 }
 
 /// Remember the game's output window, used to gate hotkeys on focus.

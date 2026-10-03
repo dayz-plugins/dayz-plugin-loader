@@ -8,9 +8,9 @@
 use core::ffi::c_void;
 
 use dayz_plugin_api::{
-    ArgEntry, Bytes, CommandDesc, EnvEntry, HostApi, HotkeyDesc, LineFn, LogLevel, PanelDesc,
-    PluginHandle, ReplyFn, SettingDesc, SettingFlags, SettingKind, Status, Str, UiValue, UiWidget,
-    API_VERSION,
+    ArgEntry, Bytes, CommandDesc, DialogDesc, EnvEntry, HostApi, HotkeyDesc, LineFn, LogLevel,
+    NoticeDesc, PanelDesc, PluginHandle, ReplyFn, SettingDesc, SettingFlags, SettingKind, Status,
+    Str, UiAnswer, UiValue, UiWidget, API_VERSION,
 };
 use dayz_plugin_core::settings;
 
@@ -110,6 +110,9 @@ pub(crate) fn build(game_dir: &str, config_dir: &str, process: &Process) -> &'st
         panel_set_open,
         panel_is_open,
         ui_widget,
+        notice_show,
+        dialog_open,
+        ui_close,
         console_capture,
     }))
 }
@@ -594,4 +597,77 @@ unsafe extern "C" fn ui_widget(
         return Status::Unsupported;
     }
     super::ui::widget(plugin, frame, kind, &text(text_arg), value)
+}
+
+unsafe extern "C" fn notice_show(
+    _host: *mut c_void,
+    plugin: PluginHandle,
+    desc: *const NoticeDesc,
+    out_id: *mut u64,
+) -> Status {
+    if desc.is_null() {
+        return Status::InvalidArgument;
+    }
+    // SAFETY: checked non-null; the ABI requires a valid descriptor.
+    let d = unsafe { &*desc };
+    if d.struct_size < core::mem::size_of::<NoticeDesc>() {
+        return Status::Unsupported;
+    }
+    let id = super::ui::passing(
+        Some(plugin),
+        d.kind,
+        d.level,
+        &text(d.title),
+        &text(d.text),
+        d.seconds,
+    );
+    if !out_id.is_null() {
+        // SAFETY: checked non-null; the ABI requires a writable out-param.
+        unsafe { out_id.write(id) };
+    }
+    super::ui::recount();
+    Status::Ok
+}
+
+unsafe extern "C" fn dialog_open(
+    _host: *mut c_void,
+    plugin: PluginHandle,
+    desc: *const DialogDesc,
+    out_id: *mut u64,
+) -> Status {
+    if desc.is_null() || out_id.is_null() {
+        return Status::InvalidArgument;
+    }
+    // SAFETY: checked non-null; the ABI requires a valid descriptor.
+    let d = unsafe { &*desc };
+    if d.struct_size < core::mem::size_of::<DialogDesc>() {
+        return Status::Unsupported;
+    }
+    let id = super::ui::modal_dialog(
+        Some(plugin),
+        d.kind,
+        d.level,
+        &text(d.title),
+        &text(d.text),
+        &text(d.default_text),
+        &text(d.accept_label),
+        &text(d.cancel_label),
+    );
+    // SAFETY: checked non-null; the ABI requires a writable out-param.
+    unsafe { out_id.write(id) };
+    super::ui::recount();
+    Status::Ok
+}
+
+unsafe extern "C" fn ui_close(_host: *mut c_void, plugin: PluginHandle, id: u64) -> Status {
+    let Some(entry) = super::ui::take_owned(plugin, id) else {
+        return Status::NotFound;
+    };
+    // A dialog always gets an answer, even the one the plugin closed itself: a plugin that
+    // only handles `on_dialog` then has exactly one place where a dialog ends.
+    if let Some((owner, id, answer, answer_text)) = super::ui::answer_of(&entry, UiAnswer::Closed) {
+        super::dispatch::dialog(owner, id, answer, &answer_text);
+    }
+    super::ui::recount();
+    Status::Ok
 }

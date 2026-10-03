@@ -3,8 +3,10 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use dayz_plugin_sdk::api::StopReason;
-use dayz_plugin_sdk::{export_plugin, Host, Plugin, PluginError, PresentInfo, Setting, Ui};
+use dayz_plugin_sdk::api::{StopReason, UiAnswer, UiLevel};
+use dayz_plugin_sdk::{
+    export_plugin, Dialog, Host, Notice, Plugin, PluginError, PresentInfo, Setting, Shown, Ui,
+};
 
 struct Hello {
     frames: AtomicU64,
@@ -85,6 +87,46 @@ impl Plugin for Hello {
         }
         if ui.button("Reset the frame counter") {
             self.frames.store(0, Ordering::Relaxed);
+        }
+        ui.separator();
+        ui.label("Everything the loader can put on screen:");
+        if ui.button("Toast") {
+            let _ = host.show(&Notice::toast("The greeting was printed.").level(UiLevel::Success));
+        }
+        if ui.button("Notice in the middle") {
+            let _ = host.show(
+                &Notice::centred("Watch out")
+                    .level(UiLevel::Warning)
+                    .seconds(2.0),
+            );
+        }
+        if ui.button("Message box") {
+            let _ = host.ask(&Dialog::message("Hello", "This is a message box."));
+        }
+        if ui.button("Confirm") {
+            let _ = host.ask(
+                &Dialog::confirm("Reset?", "Set the frame counter back to zero?")
+                    .buttons("Reset", "Keep"),
+            );
+        }
+        if ui.button("Ask for the greeting") {
+            let _ = host.ask(
+                &Dialog::input("Greeting", "What should the greeting be?")
+                    .default_text(&host.get("greeting").unwrap_or_default()),
+            );
+        }
+    }
+
+    fn on_dialog(&self, host: &Host, _dialog: Shown, answer: UiAnswer, text: &str) {
+        // One place where every dialog ends, including the ones the loader closed because
+        // this plugin was stopped.
+        if answer != UiAnswer::Accepted {
+            return;
+        }
+        if text.is_empty() {
+            self.frames.store(0, Ordering::Relaxed);
+        } else if let Err(e) = host.set("greeting", text) {
+            let _ = host.show(&Notice::toast(&format!("{e}")).level(UiLevel::Error));
         }
     }
 
