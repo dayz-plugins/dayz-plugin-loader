@@ -106,6 +106,13 @@ Build it as a `cdylib` for `x86_64-pc-windows-msvc` and drop the DLL into
 A plugin in another language only needs the three exports and the structs from
 `crates/dayz-plugin-api`; nothing in the ABI is Rust specific.
 
+## Documentation
+
+Prose documentation lives in
+[dayz-plugins.github.io](https://github.com/dayz-plugins/dayz-plugins.github.io): engine
+reverse-engineering notes under `research/`, design documents under `design/`. This
+repository carries only this README and `AGENTS.md`.
+
 ## License
 
 Public domain (Unlicense), like the rest of the organisation's repositories.
