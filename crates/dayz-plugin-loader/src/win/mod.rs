@@ -149,6 +149,7 @@ fn init() -> bool {
     // under Escape on every layout, and its virtual key code is a different one on each — the
     // reason binding it by name worked on one keyboard and not on the next.
     guard.register_loader_hotkey("console", "Show the in-game console", "sc29");
+    guard.register_loader_hotkey("settings", "Show the settings editor", "f11");
     for entry in guard.hotkeys.iter() {
         let binding = entry
             .chord
@@ -236,8 +237,10 @@ fn handled_by_loader(action: &str) -> bool {
         return false;
     };
     if owner == "loader" {
-        if name == "console" {
-            ui::toggle_console();
+        match name {
+            "console" => ui::toggle_console(),
+            "settings" => ui::toggle_editor(),
+            other => log::warn!("no loader action named {other}"),
         }
         return true;
     }

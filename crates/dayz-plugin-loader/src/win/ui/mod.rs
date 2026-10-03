@@ -15,6 +15,7 @@ mod frame;
 mod overlays;
 mod paint;
 mod render;
+mod settings_panel;
 mod wnd;
 
 use core::ffi::c_void;
@@ -36,6 +37,8 @@ static CAPTURING: AtomicBool = AtomicBool::new(false);
 static VISIBLE: AtomicBool = AtomicBool::new(false);
 /// Whether the loader's own console panel is open.
 static CONSOLE_OPEN: AtomicBool = AtomicBool::new(false);
+/// Whether the loader's settings editor is open.
+static EDITOR_OPEN: AtomicBool = AtomicBool::new(false);
 /// How many plugin panels are open, so `Present` can leave immediately when none are.
 static PANELS_OPEN: AtomicUsize = AtomicUsize::new(0);
 /// Hands out the per-call tokens that stand in for a panel body.
@@ -55,6 +58,7 @@ struct Overlay {
     renderer: egui_directx11::Renderer,
     device: ID3D11Device,
     console: console_panel::ConsolePanel,
+    editor: settings_panel::SettingsPanel,
     /// Whether the console panel was drawn last frame, so opening it can take the keyboard.
     console_shown: bool,
     started: Instant,
@@ -85,6 +89,15 @@ pub(crate) fn toggle_console() {
     refresh();
 }
 
+/// Open or close the loader's settings editor.
+pub(crate) fn toggle_editor() {
+    let open = !EDITOR_OPEN.load(Ordering::Relaxed);
+    EDITOR_OPEN.store(open, Ordering::Relaxed);
+    log::debug!("settings editor {}", if open { "opened" } else { "closed" });
+    wnd::flush();
+    recount();
+}
+
 /// A panel was toggled from a hotkey: forget the keystroke that did it, then recount.
 pub(crate) fn opened() {
     wnd::flush();
@@ -107,7 +120,9 @@ pub(crate) fn refresh() {
 /// Split in two because a toast is visible without taking the keyboard: only windows and a
 /// modal dialog capture, everything else merely draws.
 pub(crate) fn recount() {
-    let windows = PANELS_OPEN.load(Ordering::Relaxed) > 0 || CONSOLE_OPEN.load(Ordering::Relaxed);
+    let windows = PANELS_OPEN.load(Ordering::Relaxed) > 0
+        || CONSOLE_OPEN.load(Ordering::Relaxed)
+        || EDITOR_OPEN.load(Ordering::Relaxed);
     CAPTURING.store(windows || overlays::modal(), Ordering::Relaxed);
     VISIBLE.store(windows || overlays::any(), Ordering::Relaxed);
 }
@@ -148,6 +163,7 @@ fn create(chain: &windows::Win32::Graphics::Dxgi::IDXGISwapChain) -> Option<Over
         renderer,
         device,
         console: console_panel::ConsolePanel::default(),
+        editor: settings_panel::SettingsPanel::default(),
         console_shown: false,
         started: Instant::now(),
         scale: 1.0,
@@ -221,6 +237,15 @@ impl Overlay {
         let mut submitted = None;
         let mut closed = Vec::new();
         let queued = overlays::snapshot();
+        let editor_open = EDITOR_OPEN.load(Ordering::Relaxed);
+        let sections = if editor_open {
+            state().editor_snapshot()
+        } else {
+            Vec::new()
+        };
+        let pressed = editor_open.then(wnd::take_last_key).flatten();
+        let editor = &mut self.editor;
+        let mut edits = settings_panel::Edits::default();
         let mut painted = paint::Outcome::default();
         let output = ctx.run_ui(input, |ui| {
             let ctx = ui.ctx().clone();
@@ -248,11 +273,44 @@ impl Overlay {
                     closed.push((*handle, panel.clone()));
                 }
             }
+            if editor_open {
+                let mut keep = true;
+                edits = editor.show(&ctx, &sections, pressed, &mut keep);
+                if !keep {
+                    EDITOR_OPEN.store(false, Ordering::Relaxed);
+                }
+            }
             painted = paint::draw(&ctx, &queued);
             cursor(&ctx);
         });
         resolve(&painted);
+        apply_edits(&edits);
         (output, submitted, closed)
+    }
+}
+
+/// Write back what the settings editor changed.
+///
+/// Through the same calls the console makes, so a slider and a typed `set` cannot disagree,
+/// and with no lock held across the plugin notification that follows a setting change.
+fn apply_edits(edits: &settings_panel::Edits) {
+    for (name, value) in &edits.settings {
+        let outcome = state().set_setting(None, name, value);
+        match outcome {
+            Ok(notify) => {
+                log::debug!("editor set {name} = {value}");
+                dispatch::deliver(notify.into_iter().collect());
+            }
+            Err((_, message)) => log::warn!("editor could not set {name}: {message}"),
+        }
+    }
+    for (action, chord) in &edits.bindings {
+        let binding = chord.map_or_else(|| "none".to_owned(), |c| c.to_string());
+        if state().rebind_hotkey(action, *chord) {
+            log::info!("rebound {action} to {binding}");
+        } else {
+            log::warn!("no such action: {action}");
+        }
     }
 }
 

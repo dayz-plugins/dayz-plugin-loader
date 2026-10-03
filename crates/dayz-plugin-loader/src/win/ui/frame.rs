@@ -150,7 +150,15 @@ fn setting(ui: &mut egui::Ui, caller: PluginHandle, name: &str) -> Status {
 }
 
 /// Draw the control for one setting kind; returns the new value when the user changed it.
-fn control(ui: &mut egui::Ui, desc: &Desc, label: &str, current: &str) -> Option<String> {
+///
+/// Shared with the settings editor so a slider looks and behaves the same whether a plugin
+/// put it in its own panel or the user found it in the loader's list.
+pub(super) fn control(
+    ui: &mut egui::Ui,
+    desc: &Desc,
+    label: &str,
+    current: &str,
+) -> Option<String> {
     match desc.kind {
         Kind::Bool => {
             let mut on = current == "true";

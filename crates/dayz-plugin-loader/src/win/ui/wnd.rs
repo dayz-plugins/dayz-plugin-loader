@@ -39,6 +39,8 @@ struct Pending {
     pointer: Pos2,
     focused: bool,
     screen: Vec2,
+    /// Virtual key of the most recent key press, for the hotkey recorder.
+    last_key: Option<u16>,
 }
 
 static PENDING: Mutex<Pending> = Mutex::new(Pending {
@@ -47,6 +49,7 @@ static PENDING: Mutex<Pending> = Mutex::new(Pending {
     pointer: Pos2::ZERO,
     focused: true,
     screen: Vec2::new(1920.0, 1080.0),
+    last_key: None,
 });
 
 fn pending() -> std::sync::MutexGuard<'static, Pending> {
@@ -89,6 +92,20 @@ pub(crate) fn take_input(screen: Rect, time: f64) -> RawInput {
         focused: guard.focused,
         ..RawInput::default()
     }
+}
+
+/// The last key pressed while the overlay had the input, taken out on read.
+///
+/// The hotkey recorder needs the key itself rather than an egui event: egui has no notion of
+/// `VK_OEM_5`, and a binding must be in the loader's own grammar.
+pub(crate) fn take_last_key() -> Option<(u16, dayz_plugin_core::keys::Modifiers)> {
+    let mut guard = pending();
+    let modifiers = dayz_plugin_core::keys::Modifiers {
+        ctrl: guard.modifiers.ctrl,
+        alt: guard.modifiers.alt,
+        shift: guard.modifiers.shift,
+    };
+    guard.last_key.take().map(|vk| (vk, modifiers))
 }
 
 /// Drop everything collected so far.
@@ -200,6 +217,9 @@ fn record(msg: u32, wparam: WPARAM, lparam: LPARAM, capturing: bool) -> bool {
             let vk = wparam.0 as u16;
             let mut guard = pending();
             update_modifiers(&mut guard.modifiers, vk, pressed);
+            if pressed {
+                guard.last_key = Some(vk);
+            }
             if let Some(key) = key_of(vk) {
                 let modifiers = guard.modifiers;
                 guard.events.push(Event::Key {

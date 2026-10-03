@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use dayz_plugin_api::{PluginHandle, Status};
-use dayz_plugin_core::{hotkeys, names, settings, store};
+use dayz_plugin_core::{hotkeys, keys, names, settings, store};
 
 use crate::config::{LoaderConfig, Paths};
 
@@ -19,6 +19,32 @@ pub struct CommandInfo {
     pub help: String,
     /// Argument syntax.
     pub usage: String,
+}
+
+/// One row of the settings editor's hotkey table.
+#[derive(Debug, Clone)]
+pub struct HotkeyRow {
+    /// Qualified action name, `<plugin>.<action>`.
+    pub name: String,
+    /// What the action does, as the plugin described it.
+    pub title: String,
+    /// Current binding in config form.
+    pub binding: String,
+    /// What it would be without an override.
+    pub default: String,
+}
+
+/// One plugin's worth of the settings editor.
+#[derive(Debug, Clone)]
+pub struct EditorSection {
+    /// Plugin name, or `loader` for the loader's own actions.
+    pub plugin: String,
+    /// Whether the plugin is running; a stopped one is still listed, greyed out.
+    pub running: bool,
+    /// Settings with their current values.
+    pub settings: Vec<(settings::Desc, String)>,
+    /// Hotkeys belonging to this plugin.
+    pub hotkeys: Vec<HotkeyRow>,
 }
 
 /// A UI panel a plugin registered. The loader owns the window and this state; the plugin
@@ -501,6 +527,82 @@ impl State {
                 })
             })
             .collect()
+    }
+
+    /// Everything the settings editor shows for one plugin.
+    ///
+    /// Taken as a snapshot because the editor draws without the lock held: writing a setting
+    /// calls into the owning plugin, and the lock is never held across a call into a plugin.
+    pub fn editor_snapshot(&self) -> Vec<EditorSection> {
+        let mut sections: Vec<EditorSection> = self
+            .plugins
+            .iter()
+            .map(|record| EditorSection {
+                plugin: record.name.clone(),
+                running: record.enabled,
+                settings: record
+                    .settings
+                    .iter()
+                    .map(|(desc, value)| (desc.clone(), value.to_owned()))
+                    .collect(),
+                hotkeys: Vec::new(),
+            })
+            .collect();
+        // The loader's own actions belong to nobody's plugin, and are worth editing too.
+        sections.push(EditorSection {
+            plugin: "loader".to_owned(),
+            running: true,
+            settings: Vec::new(),
+            hotkeys: Vec::new(),
+        });
+        for entry in self.hotkeys.iter() {
+            let Some((owner, _)) = entry.name.split_once('.') else {
+                continue;
+            };
+            let Some(section) = sections.iter_mut().find(|s| s.plugin == owner) else {
+                continue;
+            };
+            section.hotkeys.push(HotkeyRow {
+                name: entry.name.clone(),
+                title: entry.title.clone(),
+                binding: entry
+                    .chord
+                    .map_or_else(|| "none".to_owned(), |c| c.to_string()),
+                default: entry
+                    .default
+                    .map_or_else(|| "none".to_owned(), |c| c.to_string()),
+            });
+        }
+        sections.retain(|s| !s.settings.is_empty() || !s.hotkeys.is_empty());
+        sections
+    }
+
+    /// Change one binding and remember it in `hotkeys.toml`.
+    ///
+    /// Returns whether the action exists. A binding equal to the default is removed from the
+    /// overrides rather than written, so a changed default still reaches the user later.
+    pub fn rebind_hotkey(&mut self, name: &str, chord: Option<keys::Chord>) -> bool {
+        let default = self
+            .hotkeys
+            .iter()
+            .find(|e| e.name == name)
+            .map(|e| e.default);
+        if !self.hotkeys.rebind(name, chord) {
+            return false;
+        }
+        if default == Some(chord) {
+            self.hotkey_overrides.remove(name);
+        } else {
+            self.hotkey_overrides.insert(
+                name.to_owned(),
+                chord.map_or_else(|| "none".to_owned(), |c| c.to_string()),
+            );
+        }
+        let path = self.paths.hotkeys_file();
+        if let Err(e) = store::write(&path, &self.hotkey_overrides) {
+            log::error!("could not save hotkeys: {e}");
+        }
+        true
     }
 
     /// Register a hotkey the loader itself handles, named `loader.<action>`.
