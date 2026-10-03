@@ -1,0 +1,17 @@
+[package]
+name = "dayz-data"
+description = "Reader and resolver for the dayz-data database: byte patterns, per-build address caches and struct offsets."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json = "1"
+sha2 = "0.10"
+thiserror.workspace = true
+
+[lints]
+workspace = true
