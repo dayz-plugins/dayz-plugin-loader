@@ -179,6 +179,21 @@ restart the game; `plugin load` is for a DLL this session has not seen.
 | `stop(Exit)` | The process is going away; do the least that is correct. |
 | `stop(StartFailed)` | `start` failed partway and the loader is undoing it. |
 
+### Answering for the console
+
+`host.console_exec` runs a line; its output goes to the console window and the log. A plugin
+that is answering someone else's question — a remote console, an overlay, a test — needs the
+lines themselves:
+
+```rust
+let (status, lines) = host.console_capture("plugins");
+```
+
+The sink is called once per printed line before the call returns, and the echoed `> line` is
+not part of it. This is the whole mechanism behind
+[dayz-debug-plugin](https://github.com/dayz-plugins/dayz-debug-plugin), which serves the
+console on a loopback socket without knowing what a single command means.
+
 ### Hooks
 
 A plugin can patch the game, but registering the hook through the loader means the loader
@@ -206,6 +221,13 @@ Build it as a `cdylib` for `x86_64-pc-windows-msvc` and drop the DLL into
 A plugin in another language only needs the three exports and the structs from
 `crates/dayz-plugin-api`; nothing in the ABI is Rust specific.
 
+The ABI carries a version (`API_VERSION`, currently 3) and every struct its own `struct_size`,
+so the loader refuses a plugin built against a different version rather than reading a shorter
+table. Fields are only ever appended; a version bump means an existing field changed meaning.
+Version 2 added dependencies and the lifecycle callbacks, version 3 the hook registry and
+`console_capture`. A plugin and the loader it runs in must come from the same version, which
+in practice means rebuilding plugins when the loader's ABI moves.
+
 ## Game addresses
 
 A plugin asks for an address by name and never contains one:
@@ -228,6 +250,14 @@ The `dayz-data` command inspects and maintains the database:
 ```bash
 cargo run -p dayz-data-tool -- validate ../dayz-data --exe "$DAYZ_DIR/DayZ_x64.exe"
 ```
+
+## Related repositories
+
+| Repository | What it is |
+| --- | --- |
+| [dayz-data](https://github.com/dayz-plugins/dayz-data) | The address database: patterns, per-build caches, seeds. |
+| [dayz-debug-plugin](https://github.com/dayz-plugins/dayz-debug-plugin) | The console, settings and state on a loopback socket, plus `dayz-ctl` to talk to it from a shell. |
+| [dayz-plugins.github.io](https://github.com/dayz-plugins/dayz-plugins.github.io) | All prose documentation: research notes and design documents. |
 
 ## Documentation
 
