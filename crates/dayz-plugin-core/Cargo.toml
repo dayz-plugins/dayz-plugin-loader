@@ -1,0 +1,16 @@
+[package]
+name = "dayz-plugin-core"
+description = "Platform independent logic of the DayZ plugin loader: registries, key grammar, console parsing, config files."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+toml.workspace = true
+serde.workspace = true
+
+[lints]
+workspace = true
