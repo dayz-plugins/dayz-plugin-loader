@@ -386,6 +386,72 @@ impl Host {
         };
     }
 
+    /// Version of the dayz-data entry matching the running executable, or `None` when this
+    /// build is not in the database.
+    #[must_use]
+    pub fn game_build(&self) -> Option<String> {
+        let build = str_from(self.api.data_build);
+        (!build.is_empty()).then_some(build)
+    }
+
+    /// Base address the game executable is mapped at.
+    #[must_use]
+    pub fn module_base(&self) -> *mut c_void {
+        self.api.module_base
+    }
+
+    /// Absolute address of a named symbol, for example `render.frame`.
+    ///
+    /// Always ask by name; never compile an address into a plugin. A symbol that did not
+    /// resolve for the running build is an error here rather than a wrong address.
+    ///
+    /// # Errors
+    /// The symbol is not in the database, or did not resolve for this build.
+    pub fn symbol(&self, name: &str) -> Result<*mut c_void, PluginError> {
+        let mut out = core::ptr::null_mut();
+        // SAFETY: `name` outlives the call and `out` is a valid out-pointer.
+        check(unsafe {
+            (self.api.symbol_get)(self.api.host, self.handle, Str::new(name), &raw mut out)
+        })?;
+        Ok(out)
+    }
+
+    /// A named struct field offset, for example `framebase.rotation`.
+    ///
+    /// # Errors
+    /// The offset is not in the database for this build.
+    pub fn offset(&self, name: &str) -> Result<u64, PluginError> {
+        let mut out = 0u64;
+        // SAFETY: `name` outlives the call and `out` is a valid out-pointer.
+        check(unsafe {
+            (self.api.offset_get)(self.api.host, self.handle, Str::new(name), &raw mut out)
+        })?;
+        Ok(out)
+    }
+
+    /// Declare the symbols this plugin cannot work without. Call during `start` and return
+    /// the error: the loader then logs the missing name and leaves the plugin unloaded,
+    /// which is what makes a game update a clear message instead of a crash.
+    ///
+    /// # Errors
+    /// The first symbol that did not resolve, named in the message.
+    pub fn require_symbols<'a>(
+        &self,
+        names: impl IntoIterator<Item = &'a str>,
+    ) -> Result<(), PluginError> {
+        for name in names {
+            // SAFETY: `name` outlives the call.
+            let status =
+                unsafe { (self.api.symbol_require)(self.api.host, self.handle, Str::new(name)) };
+            if status != Status::Ok {
+                return Err(PluginError::Message(format!(
+                    "{name} is not available in this build"
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// Ask for a specific backbuffer size. Only honoured during `start`.
     ///
     /// # Errors

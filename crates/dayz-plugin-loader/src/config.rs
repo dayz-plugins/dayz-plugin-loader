@@ -21,6 +21,8 @@ pub struct Paths {
     pub config_dir: PathBuf,
     /// `<game>/dayz-plugins/logs`.
     pub logs_dir: PathBuf,
+    /// `<game>/dayz-plugins/data`: the dayz-data database.
+    pub data_dir: PathBuf,
 }
 
 impl Paths {
@@ -33,6 +35,7 @@ impl Paths {
             plugins_dir: root.join("plugins"),
             config_dir: root.join("config"),
             logs_dir: root.join("logs"),
+            data_dir: root.join(dayz_data::DIRECTORY_NAME),
         }
     }
 
@@ -117,6 +120,7 @@ mod tests {
     fn paths_follow_layout() {
         let p = Paths::from_game_dir(Path::new("/g"));
         assert_eq!(p.plugins_dir, Path::new("/g/dayz-plugins/plugins"));
+        assert_eq!(p.data_dir, Path::new("/g/dayz-plugins/data"));
         assert_eq!(
             p.plugin_config("vr"),
             Path::new("/g/dayz-plugins/config/vr.toml")

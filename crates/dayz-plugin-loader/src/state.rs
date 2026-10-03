@@ -84,6 +84,16 @@ pub struct State {
     pub backbuffer_override: Option<(u32, u32)>,
     /// Recent console output.
     pub console: VecDeque<String>,
+    /// Produces the lines the `symbols` command prints.
+    ///
+    /// A function pointer, because the symbol table belongs to the platform layer and this
+    /// module must stay free of it. The platform layer installs the real one at startup.
+    pub symbol_lines: fn(Option<&str>) -> Vec<String>,
+}
+
+/// Default for [`State::symbol_lines`]: no database, nothing to print.
+fn no_symbols(_prefix: Option<&str>) -> Vec<String> {
+    Vec::new()
 }
 
 impl State {
@@ -103,6 +113,7 @@ impl State {
             phase: Phase::Idle,
             backbuffer_override: None,
             console: VecDeque::new(),
+            symbol_lines: no_symbols,
         }
     }
 

@@ -16,7 +16,7 @@ use dayz_plugin_core::settings;
 use crate::process::Process;
 use crate::state::CommandInfo;
 
-use super::{console, plugins, state};
+use super::{console, data, plugins, state};
 
 /// Owned backing storage for every string the table hands out. Leaked once at startup so
 /// the pointers stay valid for as long as any plugin can hold them.
@@ -24,6 +24,7 @@ struct Storage {
     game_dir: String,
     config_dir: String,
     command_line: String,
+    data_build: String,
     args: Vec<ArgEntry>,
     env: Vec<EnvEntry>,
     // Keeps the strings the `Str`s above point into alive.
@@ -58,10 +59,15 @@ pub(crate) fn build(game_dir: &str, config_dir: &str, process: &Process) -> &'st
             value: keep(v),
         })
         .collect();
+    let (module_base, data_build) = data::resolved()
+        .map_or((core::ptr::null_mut(), String::new()), |r| {
+            (r.module_base, r.build.clone())
+        });
     let storage = Box::leak(Box::new(Storage {
         game_dir: game_dir.to_owned(),
         config_dir: config_dir.to_owned(),
         command_line: process.raw_command_line.clone(),
+        data_build,
         args,
         env,
         _owned: owned,
@@ -73,6 +79,8 @@ pub(crate) fn build(game_dir: &str, config_dir: &str, process: &Process) -> &'st
         game_dir: Str::new(&storage.game_dir),
         config_dir: Str::new(&storage.config_dir),
         command_line: Str::new(&storage.command_line),
+        module_base,
+        data_build: Str::new(&storage.data_build),
         args: storage.args.as_ptr(),
         arg_count: storage.args.len(),
         env: storage.env.as_ptr(),
@@ -90,6 +98,9 @@ pub(crate) fn build(game_dir: &str, config_dir: &str, process: &Process) -> &'st
         event_subscribe,
         event_publish,
         request_backbuffer_size,
+        symbol_get,
+        offset_get,
+        symbol_require,
     }))
 }
 
@@ -333,4 +344,66 @@ unsafe extern "C" fn request_backbuffer_size(
     state()
         .request_backbuffer(plugin, width, height)
         .map_or_else(|e| e, |()| Status::Ok)
+}
+
+unsafe extern "C" fn symbol_get(
+    _host: *mut c_void,
+    _plugin: PluginHandle,
+    name: Str,
+    out: *mut *mut c_void,
+) -> Status {
+    if out.is_null() {
+        return Status::InvalidArgument;
+    }
+    let name = text(name);
+    let Some(resolved) = data::resolved() else {
+        return Status::NotFound;
+    };
+    let Some(symbol) = resolved.table.symbol(&name) else {
+        return Status::NotFound;
+    };
+    let Ok(rva) = usize::try_from(symbol.rva) else {
+        return Status::Error;
+    };
+    // SAFETY: the symbol resolved inside the mapped image, so base + rva is within it. The
+    // pointer is only handed out; the loader never dereferences it.
+    let address = unsafe { resolved.module_base.cast::<u8>().add(rva) };
+    // SAFETY: checked non-null; the ABI requires a writable pointer.
+    unsafe { out.write(address.cast()) };
+    Status::Ok
+}
+
+unsafe extern "C" fn offset_get(
+    _host: *mut c_void,
+    _plugin: PluginHandle,
+    name: Str,
+    out: *mut u64,
+) -> Status {
+    if out.is_null() {
+        return Status::InvalidArgument;
+    }
+    let name = text(name);
+    let Some(resolved) = data::resolved() else {
+        return Status::NotFound;
+    };
+    let Some(value) = resolved.table.offset(&name) else {
+        return Status::NotFound;
+    };
+    // SAFETY: checked non-null; the ABI requires a writable `u64`.
+    unsafe { out.write(value) };
+    Status::Ok
+}
+
+unsafe extern "C" fn symbol_require(_host: *mut c_void, plugin: PluginHandle, name: Str) -> Status {
+    let name = text(name);
+    let plugin_name = state()
+        .plugin(plugin)
+        .map_or_else(|| "?".to_owned(), |p| p.name.clone());
+    let available = data::resolved().is_some_and(|r| r.table.symbol(&name).is_some());
+    if available {
+        log::debug!("[{plugin_name}] requires {name}: available");
+        return Status::Ok;
+    }
+    log::error!("[{plugin_name}] requires {name}, which did not resolve for this build");
+    Status::NotFound
 }

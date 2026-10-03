@@ -46,6 +46,9 @@ impl Plugin for Hello {
     }
 
     fn on_command(&self, host: &Host, name: &str, args: &str) -> Result<(), PluginError> {
+        if name == "where" {
+            return Self::where_is(host, args);
+        }
         if name != "greet" {
             return Err(PluginError::Unsupported);
         }
@@ -61,6 +64,22 @@ impl Plugin for Hello {
 
     fn on_setting_changed(&self, _host: &Host, key: &str, value: &str) {
         log::info!("setting {key} is now {value:?}");
+    }
+}
+
+impl Hello {
+    /// Look a game address up by name. A plugin never carries an address of its own: the
+    /// name resolves through the loader's dayz-data database, so a game update changes the
+    /// database rather than this plugin.
+    fn where_is(host: &Host, symbol: &str) -> Result<(), PluginError> {
+        if symbol.is_empty() {
+            return Err(PluginError::Message(
+                "usage: hello.where <symbol>".to_owned(),
+            ));
+        }
+        let address = host.symbol(symbol)?;
+        host.console_print(&format!("{symbol} is at {address:p}"));
+        Ok(())
     }
 }
 

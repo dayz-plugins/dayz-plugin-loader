@@ -5,6 +5,7 @@
 //! methods return what to notify and the callers here deliver it after dropping the guard.
 
 mod console;
+mod data;
 mod dispatch;
 mod exports;
 mod guard;
@@ -37,6 +38,9 @@ unsafe impl Sync for SharedHost {}
 // SAFETY: see the `Sync` impl.
 #[allow(unsafe_code)]
 unsafe impl Send for SharedHost {}
+
+/// The executable the data database is keyed on.
+const EXECUTABLE: &str = "DayZ_x64.exe";
 
 static STATE: OnceLock<Mutex<State>> = OnceLock::new();
 static HOST: OnceLock<SharedHost> = OnceLock::new();
@@ -105,6 +109,7 @@ fn init() -> bool {
         log::warn!("this build contains plugin panics but not hardware faults");
     }
 
+    data::initialize(&paths.data_dir, &paths.game_dir.join(EXECUTABLE));
     let host = hostapi::build(
         &paths.game_dir.to_string_lossy(),
         &paths.config_dir.to_string_lossy(),
@@ -131,6 +136,7 @@ fn init() -> bool {
     plugins::load_all(&settings, &disabled);
     let mut guard = state();
     guard.phase = Phase::Running;
+    guard.symbol_lines = data::console_lines;
     for entry in guard.hotkeys.iter() {
         let binding = entry
             .chord

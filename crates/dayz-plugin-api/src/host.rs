@@ -39,6 +39,13 @@ pub struct HostApi {
     /// Number of entries in [`HostApi::env`].
     pub env_count: usize,
 
+    /// Base address the game executable is mapped at. Symbol addresses are already absolute;
+    /// this is for a plugin that wants to turn one back into an image-relative address.
+    pub module_base: *mut c_void,
+    /// Version of the matched entry in the dayz-data database, or empty when the running
+    /// executable is not a known build.
+    pub data_build: Str,
+
     /// Write a line to the shared loader log, prefixed with the plugin name.
     pub log:
         unsafe extern "C" fn(host: *mut c_void, plugin: PluginHandle, level: LogLevel, msg: Str),
@@ -122,4 +129,26 @@ pub struct HostApi {
         width: u32,
         height: u32,
     ) -> Status,
+
+    /// Absolute address of a named symbol from the dayz-data database, for example
+    /// `render.frame`. Returns [`Status::NotFound`] when the symbol did not resolve for this
+    /// build, which is the case a plugin must handle instead of hardcoding an address.
+    pub symbol_get: unsafe extern "C" fn(
+        host: *mut c_void,
+        plugin: PluginHandle,
+        name: Str,
+        out: *mut *mut c_void,
+    ) -> Status,
+    /// A named struct field offset from the database, for example `framebase.rotation`.
+    pub offset_get: unsafe extern "C" fn(
+        host: *mut c_void,
+        plugin: PluginHandle,
+        name: Str,
+        out: *mut u64,
+    ) -> Status,
+    /// Declare that the plugin cannot work without this symbol. Only valid during `start`.
+    /// Returns [`Status::NotFound`] for a symbol that did not resolve; the loader logs which
+    /// one, so a game update produces a named missing symbol rather than a crash.
+    pub symbol_require:
+        unsafe extern "C" fn(host: *mut c_void, plugin: PluginHandle, name: Str) -> Status,
 }

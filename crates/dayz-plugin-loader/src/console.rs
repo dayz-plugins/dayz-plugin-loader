@@ -74,6 +74,16 @@ pub fn execute(state: &mut State, caller: Option<PluginHandle>, line: &str) -> O
             }
             Outcome::default()
         }
+        Line::Symbols(prefix) => {
+            let mut lines = (state.symbol_lines)(prefix.as_deref());
+            if lines.is_empty() {
+                lines.push("no symbols resolved; see the log for the dayz-data lines".to_owned());
+            }
+            for line in lines {
+                state.console_print(line);
+            }
+            Outcome::default()
+        }
         Line::Get(name) | Line::Variable(name, None) => get(state, caller, &name),
         Line::Set(name, value) | Line::Variable(name, Some(value)) => {
             set(state, caller, &name, &value)
@@ -259,6 +269,24 @@ mod tests {
             execute(&mut s, None, "vr.recenter").status,
             Status::NotFound
         );
+    }
+
+    #[test]
+    fn symbols_prints_what_the_platform_layer_supplies() {
+        let (mut s, _) = fixture();
+        execute(&mut s, None, "symbols");
+        assert_eq!(
+            last(&s),
+            "no symbols resolved; see the log for the dayz-data lines"
+        );
+        s.symbol_lines = |prefix| match prefix {
+            Some("render.") => vec!["render.frame 0x8E77C0".to_owned()],
+            _ => vec!["everything".to_owned()],
+        };
+        execute(&mut s, None, "symbols render.");
+        assert_eq!(last(&s), "render.frame 0x8E77C0");
+        execute(&mut s, None, "syms");
+        assert_eq!(last(&s), "everything");
     }
 
     #[test]
