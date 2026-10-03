@@ -1,0 +1,29 @@
+[package]
+name = "dayz-data-tool"
+description = "Command line tool for the dayz-data database: inspect an executable, validate a directory, generate build files and candidate patterns."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "dayz-data"
+path = "src/main.rs"
+# The binary deliberately shares its name with the `dayz-data` library, which is what the
+# command is about. Rustdoc writes both to the same path, so the binary stays out of the docs
+# rather than renaming the command people type.
+doc = false
+
+[dependencies]
+dayz-data.workspace = true
+# Reuses the loader's own command line grammar instead of adding a CLI parser.
+dayz-plugin-core.workspace = true
+# PE parsing, to lay an on-disk executable out the way Windows maps it.
+object = { version = "0.37", default-features = false, features = ["read_core", "pe", "std"] }
+serde.workspace = true
+serde_json = "1"
+
+[lints]
+workspace = true
