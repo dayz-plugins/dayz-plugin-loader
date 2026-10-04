@@ -12,6 +12,13 @@ use simplelog::{Config, ConfigBuilder, SharedLogger, WriteLogger};
 /// function pointers; a trait object here would be ceremony around `console::print`.
 pub type ConsoleSink = (fn(&str), fn() -> String);
 
+/// Where log records go to reach the in-game console: level, target, message.
+///
+/// Separate from [`ConsoleSink`] because the console window wants one formatted line and the
+/// in-game console wants the parts: it colours by level, shows the target in its own column
+/// and filters on both.
+pub type RecordSink = fn(log::Level, &str, &str);
+
 /// Name of the current log file.
 pub const LOG_FILE: &str = "loader.log";
 /// Name the previous run's log is renamed to.
@@ -66,12 +73,50 @@ impl SharedLogger for SinkLogger {
     }
 }
 
+/// A logger that hands each record to one function unformatted.
+struct RecordLogger {
+    level: LevelFilter,
+    config: Config,
+    sink: RecordSink,
+}
+
+impl Log for RecordLogger {
+    fn enabled(&self, metadata: &Metadata<'_>) -> bool {
+        metadata.level() <= self.level
+    }
+
+    fn log(&self, record: &Record<'_>) {
+        if !self.enabled(record.metadata()) {
+            return;
+        }
+        (self.sink)(record.level(), record.target(), &record.args().to_string());
+    }
+
+    fn flush(&self) {}
+}
+
+impl SharedLogger for RecordLogger {
+    fn level(&self) -> LevelFilter {
+        self.level
+    }
+
+    fn config(&self) -> Option<&Config> {
+        Some(&self.config)
+    }
+
+    fn as_log(self: Box<Self>) -> Box<dyn Log> {
+        self
+    }
+}
+
 /// Rotate and open the log. When `console` is given, log lines also go to it, through that
-/// one function. Errors are returned, not logged: there is no logger yet.
+/// one function; when `records` is given, each record also goes there unformatted, which is
+/// how the in-game console gets them. Errors are returned, not logged: there is no logger yet.
 pub fn init(
     logs_dir: &Path,
     level: LevelFilter,
     console: Option<ConsoleSink>,
+    records: Option<RecordSink>,
 ) -> std::io::Result<()> {
     fs::create_dir_all(logs_dir)?;
     let current = logs_dir.join(LOG_FILE);
@@ -88,9 +133,16 @@ pub fn init(
     if let Some((sink, clock)) = console {
         sinks.push(Box::new(SinkLogger {
             level,
-            config,
+            config: config.clone(),
             sink,
             clock,
+        }));
+    }
+    if let Some(sink) = records {
+        sinks.push(Box::new(RecordLogger {
+            level,
+            config,
+            sink,
         }));
     }
     simplelog::CombinedLogger::init(sinks).map_err(std::io::Error::other)

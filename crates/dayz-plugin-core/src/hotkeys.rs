@@ -9,19 +9,49 @@ use crate::keys::{self, Chord, KeyError, Modifiers};
 /// Stable identifier of a registered action: `<plugin>.<action>`.
 pub type ActionName = String;
 
+/// One effective binding of an action, with the state edge detection needs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Bound {
+    chord: Chord,
+    /// Whether the main key was down at the last poll.
+    down: bool,
+}
+
 /// One registered action.
+///
+/// An action can carry several bindings and fires on whichever is pressed. The list is
+/// private because each binding owns its own edge state: handing out a `&mut Vec<Chord>`
+/// would let a caller change a binding and leave the "was down" flag of the old one behind,
+/// which is an action that fires once on the release of a key it is no longer bound to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
     /// Qualified name.
     pub name: ActionName,
     /// Short label.
     pub title: String,
-    /// Binding from the descriptor.
-    pub default: Option<Chord>,
-    /// Effective binding (user override or default).
-    pub chord: Option<Chord>,
-    /// Whether the main key was down at the last poll; used for edge detection.
-    down: bool,
+    /// Bindings from the descriptor.
+    defaults: Vec<Chord>,
+    /// Effective bindings (user override or defaults).
+    chords: Vec<Bound>,
+}
+
+impl Entry {
+    /// The effective bindings, in the order they were written.
+    pub fn chords(&self) -> impl Iterator<Item = Chord> + '_ {
+        self.chords.iter().map(|bound| bound.chord)
+    }
+
+    /// The effective bindings in config form, for example `sc29, ctrl+shift+c`.
+    #[must_use]
+    pub fn binding(&self) -> String {
+        keys::format_list(&self.chords.iter().map(|b| b.chord).collect::<Vec<Chord>>())
+    }
+
+    /// What the bindings would be without a user override.
+    #[must_use]
+    pub fn default_binding(&self) -> String {
+        keys::format_list(&self.defaults)
+    }
 }
 
 /// Why registration failed.
@@ -72,30 +102,34 @@ impl Registry {
         if self.entries.iter().any(|e| e.name == name) {
             return Err(HotkeyError::Duplicate(name.to_owned()));
         }
-        let default = keys::parse(default_binding)
+        let defaults = keys::parse_list(default_binding)
             .map_err(|e| HotkeyError::BadDefault(name.to_owned(), e))?;
-        let (chord, override_error) = match overrides.get(name).map(|b| keys::parse(b)) {
-            Some(Ok(chord)) => (chord, None),
-            Some(Err(e)) => (default, Some(e)),
-            None => (default, None),
+        let (chords, override_error) = match overrides.get(name).map(|b| keys::parse_list(b)) {
+            Some(Ok(chords)) => (chords, None),
+            Some(Err(e)) => (defaults.clone(), Some(e)),
+            None => (defaults.clone(), None),
         };
         self.entries.push(Entry {
             name: name.to_owned(),
             title: title.to_owned(),
-            default,
-            chord,
-            down: false,
+            defaults,
+            chords: bind(chords),
         });
         Ok(override_error)
     }
 
-    /// Change the effective binding of an action at runtime.
+    /// Change the effective binding of an action at runtime, to one chord or to nothing.
     #[must_use]
     pub fn rebind(&mut self, name: &str, chord: Option<Chord>) -> bool {
+        self.rebind_all(name, chord.into_iter().collect())
+    }
+
+    /// Replace every binding of an action at runtime.
+    #[must_use]
+    pub fn rebind_all(&mut self, name: &str, chords: Vec<Chord>) -> bool {
         match self.entries.iter_mut().find(|e| e.name == name) {
             Some(e) => {
-                e.chord = chord;
-                e.down = false;
+                e.chords = bind(chords);
                 true
             }
             None => false,
@@ -117,9 +151,9 @@ impl Registry {
         self.entries
             .iter()
             .filter(|entry| {
-                entry.chord.is_some_and(|chord| {
-                    chord.scancode == Some(scancode) && chord.modifiers == modifiers
-                })
+                entry
+                    .chords()
+                    .any(|chord| chord.scancode == Some(scancode) && chord.modifiers == modifiers)
             })
             .map(|entry| entry.name.clone())
             .collect()
@@ -134,15 +168,20 @@ impl Registry {
         let held = state.modifiers();
         let mut fired = Vec::new();
         for entry in &mut self.entries {
-            let Some(chord) = entry.chord else { continue };
-            if chord.scancode.is_some() {
-                continue;
+            // One action fires at most once per poll even when two of its bindings go down
+            // together, which is what Ctrl held over a binding that does not want it does.
+            let mut already = false;
+            for bound in &mut entry.chords {
+                if bound.chord.scancode.is_some() {
+                    continue;
+                }
+                let now = state.is_down(bound.chord.vk);
+                if now && !bound.down && bound.chord.modifiers == held && !already {
+                    fired.push(entry.name.clone());
+                    already = true;
+                }
+                bound.down = now;
             }
-            let now = state.is_down(chord.vk);
-            if now && !entry.down && chord.modifiers == held {
-                fired.push(entry.name.clone());
-            }
-            entry.down = now;
         }
         fired
     }
@@ -150,7 +189,9 @@ impl Registry {
     /// Forget all key-down state, for example when the window loses focus.
     pub fn reset(&mut self) {
         for entry in &mut self.entries {
-            entry.down = false;
+            for bound in &mut entry.chords {
+                bound.down = false;
+            }
         }
     }
 
@@ -159,14 +200,17 @@ impl Registry {
     pub fn bindings(&self) -> BTreeMap<String, String> {
         self.entries
             .iter()
-            .map(|e| {
-                (
-                    e.name.clone(),
-                    e.chord.map_or_else(|| "none".to_owned(), |c| c.to_string()),
-                )
-            })
+            .map(|e| (e.name.clone(), e.binding()))
             .collect()
     }
+}
+
+/// Wrap chords as bindings that have not been seen down yet.
+fn bind(chords: Vec<Chord>) -> Vec<Bound> {
+    chords
+        .into_iter()
+        .map(|chord| Bound { chord, down: false })
+        .collect()
 }
 
 #[cfg(test)]
@@ -193,7 +237,7 @@ mod tests {
         overrides.insert("vr.broken".to_owned(), "nokey".to_owned());
         let mut r = Registry::default();
         assert_eq!(
-            r.register("vr.toggle", "Toggle", "f12", &overrides),
+            r.register("vr.toggle", "Toggle", "f12, f9", &overrides),
             Ok(None)
         );
         assert_eq!(
@@ -211,9 +255,48 @@ mod tests {
     fn overrides_apply_and_bad_ones_fall_back() {
         let r = registry();
         let b = r.bindings();
-        assert_eq!(b["vr.toggle"], "f12");
+        assert_eq!(b["vr.toggle"], "f12, f9");
         assert_eq!(b["vr.recenter"], "ctrl+f11");
         assert_eq!(b["vr.broken"], "f10");
+    }
+
+    #[test]
+    fn either_binding_fires_the_action_and_both_together_fire_it_once() {
+        let mut r = registry();
+        let none = Modifiers::default();
+        let press = |r: &mut Registry, keys: Vec<u16>| {
+            r.poll(&Keys {
+                down: keys,
+                mods: none,
+            })
+        };
+        // 0x78 is f9, the action's second binding.
+        assert_eq!(press(&mut r, vec![0x78]), vec!["vr.toggle"]);
+        assert!(press(&mut r, vec![]).is_empty());
+        assert_eq!(press(&mut r, vec![0x7B]), vec!["vr.toggle"], "f12 too");
+        assert!(press(&mut r, vec![]).is_empty());
+        assert_eq!(
+            press(&mut r, vec![0x7B, 0x78]),
+            vec!["vr.toggle"],
+            "one action, one firing"
+        );
+    }
+
+    #[test]
+    fn a_rebind_replaces_every_binding() {
+        let mut r = registry();
+        let chord = keys::parse("f5").unwrap_or(None);
+        assert!(r.rebind("vr.toggle", chord));
+        assert_eq!(r.bindings()["vr.toggle"], "f5");
+        let none = Modifiers::default();
+        assert!(
+            r.poll(&Keys {
+                down: vec![0x7B],
+                mods: none
+            })
+            .is_empty(),
+            "the old binding is gone"
+        );
     }
 
     #[test]

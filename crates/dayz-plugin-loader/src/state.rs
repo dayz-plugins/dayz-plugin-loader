@@ -8,6 +8,7 @@ use dayz_plugin_api::{PluginHandle, Status};
 use dayz_plugin_core::{hotkeys, keys, names, settings, store, windows};
 
 use crate::config::{LoaderConfig, Paths};
+use crate::scrollback;
 
 /// Lines the console keeps for display.
 pub const CONSOLE_HISTORY: usize = 500;
@@ -129,9 +130,9 @@ pub struct State {
     /// They are not rejected, only not started yet. `plugin load <name>` starts one, and so
     /// does the dependency it waits for becoming available.
     pub pending: Vec<(String, String)>,
-    /// Recent console output.
-    pub console: VecDeque<String>,
-    /// How many lines the console has ever printed.
+    /// Recent console output and log records, oldest first.
+    pub console: VecDeque<scrollback::Line>,
+    /// How many lines the console has ever held.
     ///
     /// The buffer above is bounded, so a position in it says nothing once it is full. This
     /// counter is what [`State::console_mark`] hands out and never goes backwards.
@@ -590,12 +591,8 @@ impl State {
             section.hotkeys.push(HotkeyRow {
                 name: entry.name.clone(),
                 title: entry.title.clone(),
-                binding: entry
-                    .chord
-                    .map_or_else(|| "none".to_owned(), |c| c.to_string()),
-                default: entry
-                    .default
-                    .map_or_else(|| "none".to_owned(), |c| c.to_string()),
+                binding: entry.binding(),
+                default: entry.default_binding(),
             });
         }
         sections.retain(|s| !s.settings.is_empty() || !s.hotkeys.is_empty());
@@ -625,17 +622,15 @@ impl State {
             .hotkeys
             .iter()
             .find(|e| e.name == name)
-            .map(|e| e.default);
+            .map(hotkeys::Entry::default_binding);
         if !self.hotkeys.rebind(name, chord) {
             return false;
         }
-        if default == Some(chord) {
+        let binding = keys::format_list(&chord.into_iter().collect::<Vec<keys::Chord>>());
+        if default.as_deref() == Some(binding.as_str()) {
             self.hotkey_overrides.remove(name);
         } else {
-            self.hotkey_overrides.insert(
-                name.to_owned(),
-                chord.map_or_else(|| "none".to_owned(), |c| c.to_string()),
-            );
+            self.hotkey_overrides.insert(name.to_owned(), binding);
         }
         let path = self.paths.hotkeys_file();
         if let Err(e) = store::write(&path, &self.hotkey_overrides) {
@@ -664,13 +659,67 @@ impl State {
     }
 
     /// Append a console line, trimming history.
+    ///
+    /// Queued log records are taken first, so a command's output lands after whatever the
+    /// loader logged on the way to producing it rather than in front of it.
     pub fn console_print(&mut self, line: String) {
-        log::debug!("console: {line}");
+        // Under a target the scrollback drops, so the log file carries the console session
+        // without the console showing every line twice. See `scrollback::ECHO_TARGET`.
+        log::debug!(target: scrollback::ECHO_TARGET, "{line}");
+        self.console_drain();
+        let kind = if line.starts_with("> ") {
+            scrollback::Kind::Echo
+        } else {
+            scrollback::Kind::Output
+        };
+        self.console_push(kind, String::new(), line);
+    }
+
+    /// Move everything the logger has queued into the buffer.
+    ///
+    /// Called from [`State::console_print`] and once a frame by the platform layer, which are
+    /// the two moments this lock is already held.
+    pub fn console_drain(&mut self) {
+        for (level, target, message) in scrollback::take() {
+            self.console_push(scrollback::Kind::Log(level), target, message);
+        }
+    }
+
+    fn console_push(&mut self, kind: scrollback::Kind, target: String, text: String) {
         if self.console.len() >= CONSOLE_HISTORY {
             self.console.pop_front();
         }
-        self.console.push_back(line);
         self.console_printed += 1;
+        self.console.push_back(scrollback::Line {
+            seq: self.console_printed,
+            kind,
+            clock: scrollback::clock(),
+            target,
+            text,
+        });
+    }
+
+    /// Everything a console line could name, for the input box's completion.
+    ///
+    /// The built-in words plus every registered setting and command, qualified. Taken as a
+    /// snapshot like the rest of what the overlay draws, because the lock is not held while
+    /// the frame runs.
+    pub fn completion_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = dayz_plugin_core::console::BUILTIN_NAMES
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect();
+        for record in &self.plugins {
+            for (desc, _) in record.settings.iter() {
+                names.push(format!("{}.{}", record.name, desc.key));
+            }
+            for command in record.commands.keys() {
+                names.push(format!("{}.{command}", record.name));
+            }
+        }
+        names.sort_unstable();
+        names.dedup();
+        names
     }
 
     /// Remember where the console is, for [`State::console_since`].
@@ -678,18 +727,19 @@ impl State {
         self.console_printed
     }
 
-    /// Every line printed since `mark`, oldest first.
+    /// Every line a command printed since `mark`, oldest first.
     ///
-    /// Lines that the bounded buffer has already dropped cannot be returned, so a command
-    /// that printed more than the whole history is reported from where the history starts.
+    /// Log records are left out: this is what a plugin calling `console_exec` gets back as
+    /// the answer to its own line, and whatever else the loader happened to log while the
+    /// command ran is not part of that answer.
+    ///
+    /// Lines the bounded buffer has already dropped cannot be returned, so a command that
+    /// printed more than the whole history is reported from where the history starts.
     pub fn console_since(&self, mark: u64) -> Vec<String> {
-        let produced = usize::try_from(self.console_printed.saturating_sub(mark))
-            .unwrap_or(usize::MAX)
-            .min(self.console.len());
         self.console
             .iter()
-            .skip(self.console.len() - produced)
-            .cloned()
+            .filter(|line| line.seq > mark && !matches!(line.kind, scrollback::Kind::Log(_)))
+            .map(scrollback::Line::flat)
             .collect()
     }
 }
@@ -871,6 +921,6 @@ pub(crate) mod tests {
             s.console_print(i.to_string());
         }
         assert_eq!(s.console.len(), CONSOLE_HISTORY);
-        assert_eq!(s.console.front().map(String::as_str), Some("5"));
+        assert_eq!(s.console.front().map(|line| line.text.as_str()), Some("5"));
     }
 }

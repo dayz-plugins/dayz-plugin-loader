@@ -228,6 +228,41 @@ pub fn has_name(vk: u16) -> bool {
         || NAMED.iter().any(|(_, code)| *code == vk)
 }
 
+/// Parse a binding list: chords separated by commas, any one of which fires the action.
+///
+/// Two bindings for one action is the normal case rather than a luxury: the key under Escape
+/// is the console key people reach for, and it is also the key some layouts put a dead
+/// diacritic on, so an action that only has that one binding is unreachable for them.
+///
+/// `none`, an empty string and a list of nothing but those all mean unbound.
+///
+/// # Errors
+/// The first chord that does not parse, as [`parse`] would report it.
+pub fn parse_list(binding: &str) -> Result<Vec<Chord>, KeyError> {
+    let mut chords = Vec::new();
+    for part in binding.split(',') {
+        if let Some(chord) = parse(part)? {
+            if !chords.contains(&chord) {
+                chords.push(chord);
+            }
+        }
+    }
+    Ok(chords)
+}
+
+/// A binding list in config form, `none` when there is nothing bound.
+#[must_use]
+pub fn format_list(chords: &[Chord]) -> String {
+    if chords.is_empty() {
+        return "none".to_owned();
+    }
+    chords
+        .iter()
+        .map(Chord::to_string)
+        .collect::<Vec<String>>()
+        .join(", ")
+}
+
 impl fmt::Display for Chord {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.modifiers.ctrl {
@@ -381,5 +416,18 @@ mod tests {
                 .unwrap_or_else(|| panic!("{text} parses"));
             assert_eq!(chord.to_string(), text);
         }
+    }
+
+    #[test]
+    fn a_list_round_trips_and_drops_the_unbound_parts() {
+        let chords = parse_list("sc29, ctrl+shift+c").unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(chords.len(), 2);
+        assert_eq!(format_list(&chords), "sc29, ctrl+shift+c");
+        assert_eq!(parse_list("none"), Ok(Vec::new()));
+        assert_eq!(parse_list(""), Ok(Vec::new()));
+        assert_eq!(format_list(&[]), "none");
+        // A duplicate would fire the action twice on one press.
+        assert_eq!(parse_list("f12, f12").map(|c| c.len()), Ok(1));
+        assert!(parse_list("f12, nokey").is_err());
     }
 }

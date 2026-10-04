@@ -8,8 +8,16 @@
 //!
 //! The pointer is tracked twice on purpose. `WM_MOUSEMOVE` gives an absolute position, which
 //! is what the menus produce, and raw mouse input gives deltas, which is all there is once
-//! the game has captured and recentred the cursor in play. Whichever arrives moves the same
-//! virtual pointer, and the overlay draws its own cursor for it.
+//! the game has captured and recentred the cursor in play. Both move the same virtual
+//! pointer, and the overlay draws its own cursor for it.
+//!
+//! They cannot both be believed at once, though. While the game holds the mouse it warps the
+//! system cursor back to the middle of the window every frame, and each warp arrives here as
+//! a `WM_MOUSEMOVE` at the centre — so a pointer that trusts absolute positions is dragged
+//! back to the centre as fast as the deltas move it away, which is exactly the "stuck in the
+//! middle of the screen" the overlay had. So the first relative packet latches
+//! [`Pending::relative`] and absolute positions stop being used from then on: a mouse that
+//! sends deltas is a mouse whose absolute position belongs to the game, not to us.
 
 // FFI module: a window procedure, raw input and `SetWindowLongPtrW`.
 #![allow(unsafe_code)]
@@ -21,7 +29,8 @@ use std::sync::Mutex;
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::Input::{
-    GetRawInputData, HRAWINPUT, RAWINPUT, RAWINPUTHEADER, RID_INPUT, RIM_TYPEMOUSE,
+    GetRawInputData, HRAWINPUT, MOUSE_MOVE_ABSOLUTE, RAWINPUT, RAWINPUTHEADER, RID_INPUT,
+    RIM_TYPEMOUSE,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, SetWindowLongPtrW, GWLP_WNDPROC, WM_CHAR, WM_INPUT, WM_KEYDOWN, WM_KEYUP,
@@ -49,6 +58,8 @@ struct Pending {
     last_key: Option<(u16, u16)>,
     /// Key presses since the last tick as `(scan code, virtual key)`, for scan code hotkeys.
     presses: Vec<(u16, u16)>,
+    /// Set once a relative mouse packet has been seen; see the module comment.
+    relative: bool,
 }
 
 static PENDING: Mutex<Pending> = Mutex::new(Pending {
@@ -59,6 +70,7 @@ static PENDING: Mutex<Pending> = Mutex::new(Pending {
     screen: Vec2::new(1920.0, 1080.0),
     last_key: None,
     presses: Vec::new(),
+    relative: false,
 });
 
 fn pending() -> std::sync::MutexGuard<'static, Pending> {
@@ -186,6 +198,11 @@ fn record(msg: u32, wparam: WPARAM, lparam: LPARAM, capturing: bool) -> bool {
     match msg {
         WM_MOUSEMOVE => {
             let mut guard = pending();
+            if guard.relative {
+                // The game's own recentring, or a real move whose absolute position the game
+                // has already undone. Either way it says nothing about where the user pointed.
+                return true;
+            }
             guard.pointer = client_position(lparam);
             let pos = guard.pointer;
             guard.events.push(Event::PointerMoved(pos));
@@ -197,6 +214,7 @@ fn record(msg: u32, wparam: WPARAM, lparam: LPARAM, capturing: bool) -> bool {
             if capturing {
                 if let Some(delta) = raw_mouse_delta(lparam) {
                     let mut guard = pending();
+                    guard.relative = true;
                     let screen = guard.screen;
                     let moved =
                         (guard.pointer + delta).clamp(Pos2::ZERO, Pos2::new(screen.x, screen.y));
@@ -300,6 +318,13 @@ fn keyboard(msg: u32, wparam: WPARAM, lparam: LPARAM) {
         SWALLOW_KEY.store(true, Ordering::Relaxed);
     }
     let mut guard = pending();
+    // Pasting is another thing egui leaves to its host: it expects the text itself as an
+    // event rather than reading the clipboard, so Ctrl+V is turned into one here.
+    if pressed && modifiers.ctrl && vk == u16::from(b'V') {
+        if let Some(text) = crate::win::clipboard::text() {
+            guard.events.push(Event::Paste(text));
+        }
+    }
     if let Some(key) = key_of(vk) {
         let modifiers = guard.modifiers;
         guard.events.push(Event::Key {
@@ -344,8 +369,28 @@ fn raw_mouse_delta(lparam: LPARAM) -> Option<Vec2> {
     }
     // SAFETY: the type field above says this union holds the mouse variant.
     let mouse = unsafe { data.data.mouse };
+    // A tablet, a touch screen and a remote desktop session send raw input as an absolute
+    // position in a virtual-desktop coordinate space rather than as a delta. Adding that to
+    // the pointer would throw it across the screen, and it is also not the case the latch
+    // above is for, so those packets are left to `WM_MOUSEMOVE`.
+    if mouse.usFlags.0 & MOUSE_MOVE_ABSOLUTE.0 != 0 {
+        return None;
+    }
     #[allow(clippy::cast_precision_loss)]
     Some(Vec2::new(mouse.lLastX as f32, mouse.lLastY as f32))
+}
+
+/// Put the virtual pointer in the middle of the screen.
+///
+/// Called when the overlay takes the mouse. Without it the pointer is wherever the last
+/// absolute position left it — the top left corner on the very first window, because that is
+/// where a tracked position starts and the game's cursor never produced one.
+pub(crate) fn centre_pointer() {
+    let mut guard = pending();
+    let screen = guard.screen;
+    guard.pointer = Pos2::new(screen.x / 2.0, screen.y / 2.0);
+    let pos = guard.pointer;
+    guard.events.push(Event::PointerMoved(pos));
 }
 
 fn update_modifiers(modifiers: &mut Modifiers, vk: u16, pressed: bool) {

@@ -4,6 +4,7 @@
 //! Lock discipline: the [`state()`] mutex is never held across a call into a plugin. State
 //! methods return what to notify and the callers here deliver it after dropping the guard.
 
+mod clipboard;
 mod console;
 mod data;
 mod deps;
@@ -100,8 +101,13 @@ fn init() -> bool {
         level.clone_into(&mut config.log_level);
     }
     let console_sink: Option<logging::ConsoleSink> =
-        console::is_active().then_some((console::print, console::clock));
-    if let Err(e) = logging::init(&paths.logs_dir, config.level(), console_sink) {
+        console::is_active().then_some((console::print, crate::scrollback::clock));
+    if let Err(e) = logging::init(
+        &paths.logs_dir,
+        config.level(),
+        console_sink,
+        Some(crate::scrollback::record),
+    ) {
         console::print(&format!("could not open the log file: {e}"));
     }
     log::info!(
@@ -151,25 +157,39 @@ fn init() -> bool {
     guard.hook_lines = plugin_hooks::console_lines;
     guard.read_lines = memory::console_lines;
     guard.input_lines = plugin_input::summary;
-    // The loader's own overlay actions. Bound by scan code, not by key name: 0x29 is the key
-    // under Escape on every layout, and its virtual key code is a different one on each — the
-    // reason binding it by name worked on one keyboard and not on the next.
-    guard.register_loader_hotkey("console", "Show the in-game console", "sc29");
+    // The loader's own overlay actions. The console's first binding is by scan code, not by
+    // key name: 0x29 is the key under Escape on every layout, and its virtual key code is a
+    // different one on each — the reason binding it by name worked on one keyboard and not on
+    // the next. The second one is for the layouts where that key is a dead diacritic, and for
+    // anyone who would rather not reach for it.
+    guard.register_loader_hotkey("console", "Show the in-game console", "sc29, ctrl+shift+c");
     guard.register_loader_hotkey("settings", "Show the settings editor", "f11");
+    guard.register_loader_hotkey(
+        "mouse",
+        "Give the mouse back to the game, or take it",
+        "ctrl+shift+m",
+    );
     for entry in guard.hotkeys.iter() {
-        let binding = entry
-            .chord
-            .map_or_else(|| "none".to_owned(), |c| c.to_string());
+        let binding = entry.binding();
         // A scan code binding also reports what this keyboard layout makes of it, because
         // "the key under Escape does nothing" is otherwise impossible to diagnose from a log.
-        let resolved = entry
-            .chord
-            .and_then(|c| c.scancode)
-            .and_then(|sc| {
+        let resolved: Vec<String> = entry
+            .chords()
+            .filter_map(|c| c.scancode)
+            .filter_map(|sc| {
                 dayz_plugin_core::hotkeys::KeyState::vk_for_scancode(&input::AsyncKeys, sc)
+                    .map(|vk| format!("sc{sc:x} is vk 0x{vk:02x} on this layout"))
             })
-            .map_or_else(String::new, |vk| format!(" (this layout: vk 0x{vk:02x})"));
-        log::info!("hotkey {} = {binding}{resolved}", entry.name);
+            .collect();
+        if resolved.is_empty() {
+            log::info!("hotkey {} = {binding}", entry.name);
+        } else {
+            log::info!(
+                "hotkey {} = {binding} ({})",
+                entry.name,
+                resolved.join(", ")
+            );
+        }
     }
     let running = guard.plugins.iter().filter(|p| p.enabled).count();
     log::info!("{running} of {} plugins running", guard.plugins.len());
@@ -225,6 +245,9 @@ pub(crate) fn tick(_swapchain: *mut c_void) {
     let presses = ui::key_presses();
     let fired = {
         let mut guard = state();
+        // Here rather than in the overlay: the console shows the log whether or not it is
+        // open, so a line logged while it was closed is in the scrollback when it opens.
+        guard.console_drain();
         if focused {
             let mut fired = guard.hotkeys.poll(&input::AsyncKeys);
             let held = dayz_plugin_core::hotkeys::KeyState::modifiers(&input::AsyncKeys);
@@ -259,6 +282,7 @@ fn handled_by_loader(action: &str) -> bool {
         match name {
             "console" => ui::toggle_console(),
             "settings" => ui::toggle_editor(),
+            "mouse" => ui::toggle_grab(),
             other => log::warn!("no loader action named {other}"),
         }
         return true;

@@ -16,6 +16,7 @@ mod config;
 mod console;
 mod logging;
 mod process;
+mod scrollback;
 mod state;
 
 #[cfg(windows)]

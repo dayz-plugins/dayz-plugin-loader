@@ -180,6 +180,27 @@ pub fn parse(line: &str) -> Result<Line, ParseError> {
     })
 }
 
+/// Every built-in word a console line can start with, plus the `plugin` sub-commands, for
+/// completion. Kept in the same module as [`parse`] so the two cannot drift apart; the test
+/// below asserts that each one is recognised by the grammar.
+pub const BUILTIN_NAMES: &[&str] = &[
+    "help",
+    "list",
+    "plugins",
+    "plugin deps",
+    "plugin load",
+    "plugin stop",
+    "plugin enable",
+    "plugin disable",
+    "plugin list",
+    "symbols",
+    "hooks",
+    "input",
+    "read",
+    "get",
+    "set",
+];
+
 /// Help text for the built-in commands, one entry per line.
 pub const BUILTIN_HELP: &[(&str, &str)] = &[
     (
@@ -303,6 +324,22 @@ mod tests {
             parse("plugin stop"),
             Err(ParseError::PluginNeedsName("stop"))
         );
+    }
+
+    #[test]
+    fn every_completion_candidate_is_a_word_the_grammar_knows() {
+        for name in BUILTIN_NAMES {
+            // A rejection is a pass: it means the word was recognised and its arguments were
+            // not supplied, which is exactly what completing a bare command leaves behind.
+            // Falling through to a variable or a plugin command is the failure, because that
+            // is what the grammar does with a word it has never heard of.
+            if let Ok(parsed) = parse(name) {
+                assert!(
+                    !matches!(parsed, Line::Variable(..) | Line::Command(..)),
+                    "{name} is offered for completion but the grammar does not know it: {parsed:?}"
+                );
+            }
+        }
     }
 
     #[test]

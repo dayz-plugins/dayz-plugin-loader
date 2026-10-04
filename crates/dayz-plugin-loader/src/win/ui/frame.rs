@@ -165,7 +165,7 @@ pub(super) fn row(ui: &mut egui::Ui, desc: &Desc, label: &str, current: &str) ->
                 return changed;
             }
             let hint = format!("Reset to {}", describe_default(desc));
-            if ui.small_button("⟲").on_hover_text(hint).clicked() {
+            if super::icons::revert(ui, &hint) {
                 return Some(desc.default.clone());
             }
             changed

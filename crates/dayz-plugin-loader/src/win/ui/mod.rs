@@ -11,9 +11,10 @@
 //! shared with other threads is the handful of atomics below and the loader's own state.
 
 mod chrome;
-mod console_panel;
+mod console;
 mod forward;
 mod frame;
+mod icons;
 mod overlays;
 mod paint;
 mod render;
@@ -36,6 +37,15 @@ use super::{dispatch, state};
 
 /// Whether the overlay currently has the keyboard and mouse.
 static CAPTURING: AtomicBool = AtomicBool::new(false);
+/// Whether the overlay is *willing* to hold the input while its windows are open.
+///
+/// Open windows normally take the keyboard and mouse, which is what makes them usable and
+/// what stops a typed console line from also walking the player forward. That is the wrong
+/// answer for a panel somebody wants to *watch* while playing — a HUD, a map, a readout — so
+/// the `loader.mouse` hotkey clears this and the windows stay on screen with the game back in
+/// control. Set again on the next press, and whenever the last window closes, so the hotkey
+/// never has to be pressed twice to get a working panel.
+static GRABBED: AtomicBool = AtomicBool::new(true);
 /// Whether there is anything at all to draw. A toast is visible without capturing.
 static VISIBLE: AtomicBool = AtomicBool::new(false);
 /// Whether the loader's own console panel is open.
@@ -60,7 +70,7 @@ struct Overlay {
     ctx: Context,
     renderer: egui_directx11::Renderer,
     device: ID3D11Device,
-    console: console_panel::ConsolePanel,
+    console: console::ConsolePanel,
     editor: settings_panel::SettingsPanel,
     /// Whether the console panel was drawn last frame, so opening it can take the keyboard.
     console_shown: bool,
@@ -91,10 +101,40 @@ pub(crate) fn toggle_console() {
     let open = !CONSOLE_OPEN.load(Ordering::Relaxed);
     CONSOLE_OPEN.store(open, Ordering::Relaxed);
     log::debug!("in-game console {}", if open { "opened" } else { "closed" });
+    if open {
+        // A console nobody can type into is not a console: opening it always takes the input
+        // back, however the mouse was left after the last panel.
+        GRABBED.store(true, Ordering::Relaxed);
+    }
     // The key that opened this also produced a character; it belongs to the game, not to the
     // input box that is about to take the keyboard.
     wnd::flush();
     refresh();
+}
+
+/// Take the mouse and keyboard, or give them back to the game, leaving the windows up.
+pub(crate) fn toggle_grab() {
+    let grabbed = !GRABBED.load(Ordering::Relaxed);
+    GRABBED.store(grabbed, Ordering::Relaxed);
+    recount();
+    if grabbed {
+        wnd::centre_pointer();
+    }
+    let open = VISIBLE.load(Ordering::Relaxed);
+    log::info!(
+        "overlay {} the mouse",
+        if grabbed { "took" } else { "released" }
+    );
+    // Said out loud, because the overlay looks the same either way and a panel that has
+    // stopped reacting to clicks is otherwise indistinguishable from a panel that has hung.
+    let text = if grabbed {
+        "The overlay has the mouse and keyboard."
+    } else {
+        "The game has the mouse and keyboard. Panels stay on screen."
+    };
+    if open {
+        loader_toast(dayz_plugin_api::UiLevel::Info, "Input", text);
+    }
 }
 
 /// Open or close the loader's settings editor.
@@ -119,7 +159,16 @@ pub(crate) fn refresh() {
         .iter()
         .filter(|(_, _, _, _, open)| *open)
         .count();
-    PANELS_OPEN.store(open, Ordering::Relaxed);
+    let was = PANELS_OPEN.swap(open, Ordering::Relaxed);
+    let nothing_open = open == 0 && !CONSOLE_OPEN.load(Ordering::Relaxed);
+    if nothing_open {
+        GRABBED.store(true, Ordering::Relaxed);
+    } else if open > was {
+        // A window that has just appeared is one somebody wants to use.
+        if !GRABBED.swap(true, Ordering::Relaxed) {
+            wnd::centre_pointer();
+        }
+    }
     recount();
 }
 
@@ -131,7 +180,10 @@ pub(crate) fn recount() {
     let windows = PANELS_OPEN.load(Ordering::Relaxed) > 0
         || CONSOLE_OPEN.load(Ordering::Relaxed)
         || EDITOR_OPEN.load(Ordering::Relaxed);
-    CAPTURING.store(windows || overlays::modal(), Ordering::Relaxed);
+    // A modal dialog captures whatever the mouse toggle says: it is a question a plugin is
+    // waiting on an answer to, and there is no way to answer it without the pointer.
+    let grabbed = GRABBED.load(Ordering::Relaxed);
+    CAPTURING.store((windows && grabbed) || overlays::modal(), Ordering::Relaxed);
     VISIBLE.store(windows || overlays::any(), Ordering::Relaxed);
 }
 
@@ -170,7 +222,7 @@ fn create(chain: &windows::Win32::Graphics::Dxgi::IDXGISwapChain) -> Option<Over
         ctx,
         renderer,
         device,
-        console: console_panel::ConsolePanel::default(),
+        console: console::ConsolePanel::default(),
         editor: settings_panel::SettingsPanel::default(),
         console_shown: false,
         started: Instant::now(),
@@ -201,7 +253,13 @@ impl Overlay {
             return Ok(());
         };
 
-        let (renderer_output, _platform, _viewports) = egui_directx11::split_output(output);
+        let (renderer_output, platform, _viewports) = egui_directx11::split_output(output);
+        // egui asks its host to do the copying; with no backend under us, that is this.
+        for command in platform.commands {
+            if let egui::OutputCommand::CopyText(text) = command {
+                super::clipboard::set_text(&text);
+            }
+        }
         let saved = render::save(&device_context);
         let result =
             self.renderer
@@ -229,7 +287,14 @@ impl Overlay {
     /// Run the egui pass: the console, every open panel, and the overlay's own cursor.
     fn build(&mut self, input: egui::RawInput) -> Frame {
         let panels = state().panel_list();
-        let scrollback = console_lines();
+        let console_open = CONSOLE_OPEN.load(Ordering::Relaxed);
+        // Only while it is open: both are a clone of everything the console can show, and a
+        // closed console has nobody to show it to.
+        let (scrollback, names) = if console_open {
+            (console_lines(), state().completion_names())
+        } else {
+            (Vec::new(), Vec::new())
+        };
         let ctx = self.ctx.clone();
         let was_shown = self.console_shown;
         self.console_shown = CONSOLE_OPEN.load(Ordering::Relaxed);
@@ -251,17 +316,17 @@ impl Overlay {
         let mut painted = paint::Outcome::default();
         let output = ctx.run_ui(input, |ui| {
             let ctx = ui.ctx().clone();
-            if CONSOLE_OPEN.load(Ordering::Relaxed) {
+            if console_open {
                 let chrome = chrome::Chrome {
                     id: "loader.console",
                     title: "DayZ plugin loader",
-                    default_size: [640.0, 360.0],
+                    default_size: [720.0, 420.0],
                     saved: geometry_of("loader.console"),
                 };
-                let (submitted, placed) = console.show(&ctx, &scrollback, &chrome);
-                frame.submitted = submitted;
-                place(&mut placements, chrome.id, &placed);
-                if !placed.open {
+                let outcome = console.show(&ctx, &scrollback, &names, &chrome);
+                frame.submitted = outcome.submitted;
+                place(&mut placements, chrome.id, &outcome.placed);
+                if !outcome.placed.open || outcome.close {
                     CONSOLE_OPEN.store(false, Ordering::Relaxed);
                 }
             }
@@ -305,7 +370,11 @@ impl Overlay {
                 }
             }
             painted = paint::draw(&ctx, &queued);
-            cursor(&ctx);
+            if is_capturing() {
+                cursor(&ctx);
+            } else {
+                released(&ctx, &saved.mouse_binding);
+            }
         });
         resolve(&painted);
         apply_edits(&edits);
@@ -326,6 +395,8 @@ struct Saved {
     sections: Vec<crate::state::EditorSection>,
     /// Whether advanced settings are shown.
     advanced: bool,
+    /// What `loader.mouse` is bound to, for the hint shown while the game has the input.
+    mouse_binding: String,
 }
 
 impl Saved {
@@ -341,6 +412,14 @@ impl Saved {
                     .iter()
                     .map(|(_, plugin, panel, _, _)| format!("{plugin}.{panel}")),
             );
+        let mouse_binding = guard
+            .hotkeys
+            .iter()
+            .find(|entry| entry.name == "loader.mouse")
+            .map_or_else(
+                || "none".to_owned(),
+                dayz_plugin_core::hotkeys::Entry::binding,
+            );
         Saved {
             geometry: ids
                 .map(|id| (guard.windows.get(&id), id))
@@ -352,6 +431,7 @@ impl Saved {
                 Vec::new()
             },
             advanced: guard.windows.advanced(),
+            mouse_binding,
         }
     }
 
@@ -493,8 +573,35 @@ fn cursor(ctx: &Context) {
     ));
 }
 
+/// Say that the game has the input, and which key takes it back.
+///
+/// Only while windows are open, so the line does not sit over a toast on its own. Drawn in
+/// the same layer as the cursor it replaces, above everything else.
+fn released(ctx: &Context, binding: &str) {
+    if !VISIBLE.load(Ordering::Relaxed) || PANELS_OPEN.load(Ordering::Relaxed) == 0 {
+        return;
+    }
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Tooltip,
+        egui::Id::new("dayz-loader-released"),
+    ));
+    let at = Pos2::new(ctx.viewport_rect().center().x, 12.0);
+    let text = format!("The game has the mouse — {binding} to take it back");
+    let galley = painter.layout_no_wrap(
+        text,
+        egui::FontId::proportional(13.0),
+        egui::Color32::from_gray(210),
+    );
+    let rect = Rect::from_center_size(
+        Pos2::new(at.x, at.y + galley.size().y / 2.0),
+        galley.size() + Vec2::new(16.0, 8.0),
+    );
+    painter.rect_filled(rect, 4.0, egui::Color32::from_black_alpha(160));
+    painter.galley(rect.min + Vec2::new(8.0, 4.0), galley, egui::Color32::WHITE);
+}
+
 /// The console scrollback, as a snapshot taken without the lock held afterwards.
-fn console_lines() -> Vec<String> {
+fn console_lines() -> Vec<crate::scrollback::Line> {
     let guard = state();
     let total = guard.console.len();
     guard

@@ -77,11 +77,7 @@ fn title_bar(ui: &mut egui::Ui, title: &str, opacity: &mut f32, open: &mut bool)
     ui.horizontal(|ui| {
         ui.label(RichText::new(title).strong());
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui
-                .button(RichText::new("✕").strong())
-                .on_hover_text("Close")
-                .clicked()
-            {
+            if super::icons::close(ui, "Close") {
                 *open = false;
             }
             ui.spacing_mut().slider_width = SLIDER_WIDTH;

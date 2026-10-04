@@ -322,7 +322,7 @@ mod tests {
     }
 
     fn last(s: &State) -> &str {
-        s.console.back().map_or("", String::as_str)
+        s.console.back().map_or("", |line| line.text.as_str())
     }
 
     #[test]
@@ -431,7 +431,7 @@ mod tests {
     fn help_list_and_plugins() {
         let (mut s, _) = fixture();
         execute(&mut s, None, "help");
-        assert!(s.console.iter().any(|l| l.starts_with("plugins")));
+        assert!(s.console.iter().any(|l| l.text.starts_with("plugins")));
         execute(&mut s, None, "help vr.recenter");
         assert_eq!(last(&s), "vr.recenter : Recenter.");
         assert_eq!(
