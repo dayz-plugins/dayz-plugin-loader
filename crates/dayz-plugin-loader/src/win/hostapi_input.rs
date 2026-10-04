@@ -10,9 +10,9 @@
 
 use core::ffi::c_void;
 
-use dayz_plugin_api::{GameMask, InputAction, InputMask, PluginHandle, Status};
+use dayz_plugin_api::{GameClass, GameMask, InputAction, InputMask, PluginHandle, Status, Str};
 
-use super::{game_events, input_send, plugin_input, plugins};
+use super::{event_fields, game_events, hostapi, input_send, plugin_input, plugins, session};
 
 /// `HostApi::input_listen`.
 pub(super) unsafe extern "C" fn input_listen(
@@ -107,4 +107,50 @@ pub(super) unsafe extern "C" fn game_listen(
         return Status::InvalidArgument;
     }
     game_events::listen(plugin, mask)
+}
+
+/// `HostApi::game_catalogue`.
+pub(super) unsafe extern "C" fn game_catalogue(
+    _host: *mut c_void,
+    _plugin: PluginHandle,
+    out: *mut GameClass,
+    capacity: usize,
+    out_count: *mut usize,
+) -> Status {
+    if out_count.is_null() {
+        return Status::InvalidArgument;
+    }
+    let slots: &mut [GameClass] = if out.is_null() || capacity == 0 {
+        &mut []
+    } else {
+        // SAFETY: the ABI requires `out` to describe `capacity` writable structures for the
+        // duration of the call.
+        unsafe { core::slice::from_raw_parts_mut(out, capacity) }
+    };
+    let total = event_fields::catalogue(slots);
+    // SAFETY: checked non-null; the ABI requires it to be writable.
+    unsafe { out_count.write(total) };
+    // A buffer that could not hold everything is a short read the caller has to notice: it
+    // gets the true total back, so it can ask again with room.
+    if total > slots.len() && !slots.is_empty() {
+        return Status::InvalidArgument;
+    }
+    Status::Ok
+}
+
+/// `HostApi::chat_local`.
+pub(super) unsafe extern "C" fn chat_local(
+    _host: *mut c_void,
+    _plugin: PluginHandle,
+    text: Str,
+    colour: Str,
+) -> Status {
+    let (text, colour) = (hostapi::text(text), hostapi::text(colour));
+    match session::chat_local(&text, &colour) {
+        Ok(()) => Status::Ok,
+        Err(why) => {
+            log::debug!("a plugin could not put a line in chat: {why}");
+            Status::NotFound
+        }
+    }
 }

@@ -116,6 +116,8 @@ pub(crate) fn build(game_dir: &str, config_dir: &str, process: &Process) -> &'st
         console_capture,
         input_listen: super::hostapi_input::input_listen,
         game_listen: super::hostapi_input::game_listen,
+        game_catalogue: super::hostapi_input::game_catalogue,
+        chat_local: super::hostapi_input::chat_local,
         input_send: super::hostapi_input::input_send,
         input_key_down: super::hostapi_input::input_key_down,
         input_register_hid: super::hostapi_input::input_register_hid,

@@ -28,18 +28,21 @@
 //! }
 //! ```
 //!
-//! ## What an event tells you, and what it does not
+//! ## What an event tells you
 //!
 //! [`Event::name`] is the event's own class name, read out of the engine, so it is right for
 //! classes this loader has never heard of — `ConnectingStartEvent`, `MPConnectionCloseEvent`,
 //! `ClientPrepareEvent`, `RespawnEvent`, `PlayerDeathEvent` and so on. Knowing *that* an
-//! event happened is reliable.
+//! event happened is always reliable.
 //!
-//! Reading what is *inside* one is not, and the SDK does not pretend otherwise. Each class
-//! has its own fields at its own offsets, and only [`Event::object`] — the raw pointer — is
-//! offered for a plugin that has worked out a particular class's layout and wants to read it
-//! with the memory functions. [`Chat`] is the exception: it is caught where the engine still
-//! has the parts as separate arguments, so its fields are real.
+//! [`Event::fields`] is its contents, already read and rendered, for the classes whose layout
+//! is in the loader's symbol database. The two differ because they come from different places:
+//! the name is in the event, a layout is something somebody established per class and per
+//! build. So an event with no fields means nobody has done that for this class yet, and
+//! [`Event::object`] is still there for a plugin that knows better.
+//!
+//! [`Host::game_catalogue`](crate::Host::game_catalogue) is the same list up front, before
+//! anything has happened — which is what a settings screen with a row per event needs.
 
 // Reading the loader's structures is a pointer dereference by nature; this is the one place
 // a plugin does not have to write that itself.
@@ -49,6 +52,8 @@ use core::ffi::c_void;
 
 use dayz_plugin_api::{ChatMessage, GameEvent, RemoteCall};
 
+/// How one of an event's fields is stored.
+pub use dayz_plugin_api::FieldKind;
 pub use dayz_plugin_api::GameMask as Streams;
 /// What the game should do with a chat line a plugin has just seen.
 ///
@@ -57,14 +62,49 @@ pub use dayz_plugin_api::GameMask as Streams;
 /// where the other belongs.
 pub use dayz_plugin_api::GameResponse as ChatVerdict;
 
+/// One field of one event, read out of the event and rendered.
+#[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
+pub struct Field<'a> {
+    /// The field's name, as the engine's own script parameters name it.
+    pub name: &'a str,
+    /// The value, formatted. This is the point of a field and is always set.
+    pub text: &'a str,
+    /// How it is stored, for a plugin that wants the value rather than a rendering of it.
+    pub kind: FieldKind,
+    /// Where the field is, inside the event object. Readable for the length of the callback.
+    pub address: u64,
+}
+
+/// One event class the loader knows the shape of, whether or not it has been raised.
+///
+/// From [`Host::game_catalogue`](crate::Host::game_catalogue). The strings belong to the
+/// loader's symbol database and last as long as the process, so unlike a live [`Event`]'s
+/// fields these may be kept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Class {
+    /// The class name, which is what [`Event::name`] will be.
+    pub name: &'static str,
+    /// What the event means, or empty.
+    pub note: &'static str,
+    /// How many fields the loader can decode for it. Zero for a class known by name only.
+    pub field_count: usize,
+}
+
 /// One event the engine raised.
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub struct Event<'a> {
     /// The event's class name, for example `RespawnEvent`.
     pub name: &'a str,
-    /// The event object itself, for a plugin that knows this class's layout. Valid only for
-    /// the length of the callback.
+    /// Its contents, in the order the engine's own script parameters list them.
+    ///
+    /// Empty for a class whose layout is not in the loader's symbol database, which is most
+    /// of them: that is "nobody has established this one yet", not "it has no fields".
+    pub fields: &'a [Field<'a>],
+    /// The event object itself, for a plugin that knows this class's layout better than the
+    /// database does. Valid only for the length of the callback.
     pub object: *mut c_void,
 }
 
@@ -92,8 +132,42 @@ impl Event<'_> {
         let event = unsafe { &*raw };
         Some(Event {
             name: crate::host::str_ref(event.name),
+            fields: &[],
             object: event.event,
         })
+    }
+
+    /// Read the fields out of the loader's structure into `out`, and borrow them.
+    ///
+    /// Separate from [`Event::from_abi`] because the borrowed slice has to live somewhere the
+    /// caller owns: `on_game_event` keeps a small buffer on its own stack and fills it here,
+    /// so an event with no fields costs no allocation and the common case costs one `Vec`
+    /// that is dropped when the callback returns.
+    ///
+    /// # Safety
+    /// `raw` must be the pointer the loader passed to `on_game_event`, valid for `'a`.
+    pub(crate) unsafe fn read_fields<'a>(
+        raw: *const GameEvent,
+        out: &'a mut Vec<Field<'a>>,
+    ) -> Option<&'a [Field<'a>]> {
+        if raw.is_null() {
+            return None;
+        }
+        // SAFETY: as in `from_abi`.
+        let event = unsafe { &*raw };
+        if event.fields.is_null() || event.field_count == 0 {
+            return Some(&[]);
+        }
+        // SAFETY: the ABI requires `fields` to describe `field_count` readable structures for
+        // the duration of the call.
+        let fields = unsafe { core::slice::from_raw_parts(event.fields, event.field_count) };
+        out.extend(fields.iter().map(|field| Field {
+            name: crate::host::str_ref(field.name),
+            text: crate::host::str_ref(field.text),
+            kind: field.kind,
+            address: field.address,
+        }));
+        Some(out.as_slice())
     }
 }
 
@@ -178,6 +252,7 @@ mod tests {
     fn an_event_matches_its_own_class_name() {
         let event = Event {
             name: "RespawnEvent",
+            fields: &[],
             object: core::ptr::null_mut(),
         };
         assert!(event.is("RespawnEvent"));
@@ -193,5 +268,8 @@ mod tests {
         assert!(unsafe { Chat::from_abi(core::ptr::null()) }.is_none());
         // SAFETY: as above.
         assert!(unsafe { Rpc::from_abi(core::ptr::null()) }.is_none());
+        let mut buffer = Vec::new();
+        // SAFETY: as above.
+        assert!(unsafe { Event::read_fields(core::ptr::null(), &mut buffer) }.is_none());
     }
 }

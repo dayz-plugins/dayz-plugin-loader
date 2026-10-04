@@ -80,10 +80,11 @@ fn validate(args: &CommandLine, dir: Option<&str>) -> Result<(), String> {
     );
     for build in &db.builds {
         println!(
-            "  {} {} symbols, {} offsets, {:?}, sha256 {:?}",
+            "  {} {} symbols, {} offsets, {} events, {:?}, sha256 {:?}",
             build.build.version,
             build.symbols.len(),
             build.offsets.len(),
+            build.events.len(),
             build.build.provenance,
             build.build.sha256
         );
@@ -125,13 +126,29 @@ fn resolve_against(args: &CommandLine, db: &Database) -> Result<(), String> {
     for (name, value) in table.offsets() {
         println!("  {name:<32} +{value:#X}");
     }
+    for (name, entry) in table.events() {
+        let fields = entry
+            .fields
+            .iter()
+            .map(|f| format!("{}:{:?}@{:#X}", f.name, f.kind, f.offset))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let fields = if fields.is_empty() {
+            "not decoded".to_owned()
+        } else {
+            fields
+        };
+        println!("  {name:<32} {fields}");
+    }
     for issue in table.issues() {
         println!("  issue: {issue}");
     }
     println!(
-        "{} symbols, {} offsets, {} issues",
+        "{} symbols, {} offsets, {} events ({} decoded), {} issues",
         table.symbols().count(),
         table.offsets().count(),
+        table.events().count(),
+        table.events().filter(|(_, e)| !e.fields.is_empty()).count(),
         table.issues().len()
     );
     let disagreements = cross_check(&mapped.bytes, db, &table);
@@ -186,10 +203,11 @@ fn generate_files(args: &CommandLine, dir: Option<&str>) -> Result<(), String> {
         generate::generate(&seed, &mapped, &executable_name, &sha256, today);
     let written = Database::write_build(dir, &build).map_err(|e| e.to_string())?;
     println!(
-        "wrote {} ({} symbols, {} offsets)",
+        "wrote {} ({} symbols, {} offsets, {} events)",
         written.display(),
         build.symbols.len(),
-        build.offsets.len()
+        build.offsets.len(),
+        build.events.len()
     );
 
     let merged = merge_patterns(dir, patterns)?;

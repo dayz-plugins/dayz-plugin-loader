@@ -211,7 +211,11 @@ fn write_candidate(data_dir: &Path, exe: &Path, hash: &str, table: &SymbolTable)
                 (name.to_owned(), entry)
             })
             .collect(),
+        // Neither is derivable from a scan: an offset and an event class are facts a person
+        // establishes, not things a pattern finds. A candidate file carries what the scan
+        // produced and nothing it did not.
         offsets: std::collections::BTreeMap::new(),
+        events: std::collections::BTreeMap::new(),
     };
     match Database::write_build(data_dir, &file) {
         Ok(path) => log::info!("dayz-data: wrote candidate {}", path.display()),

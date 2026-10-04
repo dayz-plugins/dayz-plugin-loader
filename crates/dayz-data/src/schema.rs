@@ -107,6 +107,77 @@ pub struct OffsetEntry {
     pub note: Option<String>,
 }
 
+/// How to read one field out of an event object, and how to render what is there.
+///
+/// This is the engine's storage type, not script's: a script `bool` is a four-byte int in the
+/// object, and script's `vector` is three consecutive floats. Anything that is a pointer to
+/// something with its own class — `PlayerIdentity`, `Man`, `Serializer` — is [`FieldKind::Object`],
+/// because following one means knowing that class's layout too, which is a separate question
+/// from this one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum FieldKind {
+    /// Four-byte signed integer.
+    #[default]
+    Int,
+    /// Four-byte float.
+    Float,
+    /// Four-byte integer holding 0 or 1.
+    Bool,
+    /// Pointer to an engine string holder, or null for the empty string.
+    String,
+    /// Three consecutive floats.
+    Vector,
+    /// Pointer to some other object. Reported as the address; not followed.
+    Object,
+}
+
+/// One field of one event class.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EventField {
+    /// The field's name, taken from the script `Param` the engine builds out of it.
+    pub name: String,
+    /// Where it sits in the event object, from the object's own address.
+    #[serde(with = "crate::hex")]
+    pub offset: u64,
+    /// How to read it.
+    pub kind: FieldKind,
+    /// The script-side type, when it says more than [`EventField::kind`] does —
+    /// `PlayerIdentity` rather than just "a pointer".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub script_type: Option<String>,
+    /// What the field means, in a sentence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// One event class the engine can raise.
+///
+/// Keyed by the class name the engine itself reports — the literal its own name getter
+/// returns — so the loader can look an event up with nothing but the name it already read out
+/// of the vtable. That also makes the entry self-checking in the one way that matters: an
+/// entry whose key no longer matches any name the engine produces is simply never used, and
+/// cannot send a field read to the wrong offset.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct EventEntry {
+    /// RVA of the class's vtable, for cross-referencing against a disassembler. The loader
+    /// does not need it: it finds events by hooking the one broadcaster, not by address.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::hex::option"
+    )]
+    pub vtable: Option<u64>,
+    /// The fields, in the order the script `Param` lists them. Empty means the class is known
+    /// but its contents are not decoded, which is the honest state for most of them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<EventField>,
+    /// What the event means, in a sentence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
 /// Addresses and offsets for one build: the cache half of the database.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BuildFile {
@@ -120,6 +191,9 @@ pub struct BuildFile {
     /// Struct field offsets by name.
     #[serde(default)]
     pub offsets: BTreeMap<String, OffsetEntry>,
+    /// Event classes by the name the engine reports for them.
+    #[serde(default)]
+    pub events: BTreeMap<String, EventEntry>,
 }
 
 /// Signatures for one symbol: the source-of-truth half of the database.
@@ -167,7 +241,17 @@ mod tests {
         "render.frame": { "rva": "0x8E77C0", "check": "48 8B C4", "note": "Per-frame work." },
         "camera.manager": { "rva": "0x1007CE0", "kind": "global" }
       },
-      "offsets": { "framebase.rotation": { "value": "0x08" } }
+      "offsets": { "framebase.rotation": { "value": "0x08" } },
+      "events": {
+        "ChatMessageEvent": {
+          "vtable": "0xCE75B0",
+          "fields": [
+            { "name": "from", "offset": "0x08", "kind": "string" },
+            { "name": "channel", "offset": "0x38", "kind": "int" }
+          ]
+        },
+        "ProgressEvent": {}
+      }
     }"#;
 
     #[test]
@@ -187,6 +271,24 @@ mod tests {
         );
         assert_eq!(file.symbols["camera.manager"].kind, SymbolKind::Global);
         assert_eq!(file.offsets["framebase.rotation"].value, 8);
+    }
+
+    #[test]
+    fn reads_event_classes_including_undecoded_ones() {
+        let file: BuildFile = serde_json::from_str(BUILD_JSON).unwrap_or_else(|e| panic!("{e}"));
+        let chat = &file.events["ChatMessageEvent"];
+        assert_eq!(chat.vtable, Some(0x00CE_75B0));
+        assert_eq!(chat.fields.len(), 2);
+        assert_eq!(chat.fields[0].name, "from");
+        assert_eq!(chat.fields[0].offset, 8);
+        assert_eq!(chat.fields[0].kind, FieldKind::String);
+        assert_eq!(chat.fields[1].kind, FieldKind::Int);
+        let progress = &file.events["ProgressEvent"];
+        assert_eq!(
+            progress,
+            &EventEntry::default(),
+            "a class with nothing known about it is still a class the loader can name"
+        );
     }
 
     #[test]

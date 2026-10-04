@@ -10,8 +10,10 @@ mod data;
 mod deps;
 mod detour;
 mod dispatch;
+mod event_fields;
 mod exports;
 mod game_events;
+mod gamemem;
 mod guard;
 mod hooks;
 mod hostapi;
@@ -134,6 +136,10 @@ fn init() -> bool {
     // [`game_events`] for why that matters.
     if config.game_hooks {
         if let Some(resolved) = data::resolved() {
+            // The layouts first: an event that arrives before they are loaded would be
+            // reported with no contents, and the first one can arrive during a plugin's
+            // `start`.
+            event_fields::initialize(&resolved.table);
             game_events::install(&resolved.table, resolved.module_base as usize);
         }
     } else {

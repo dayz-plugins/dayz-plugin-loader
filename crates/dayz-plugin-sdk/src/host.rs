@@ -15,7 +15,6 @@ use dayz_plugin_api::{
 };
 pub use dayz_plugin_core::cmdline::{Arg, CommandLine};
 
-use crate::game::Streams;
 use crate::input::{Action, Watch};
 use crate::settings::{Setting, SettingKind};
 
@@ -62,7 +61,7 @@ unsafe extern "C" fn collect_reply(ctx: *mut c_void, payload: Bytes) {
     *slot = Some(bytes_from(payload).to_vec());
 }
 
-fn check(status: Status) -> Result<(), PluginError> {
+pub(crate) fn check(status: Status) -> Result<(), PluginError> {
     if status == Status::Ok {
         Ok(())
     } else {
@@ -721,21 +720,6 @@ impl Host {
     pub fn listen_input(&self, kinds: Watch) -> Result<(), PluginError> {
         // SAFETY: valid table pointer.
         check(unsafe { (self.api.input_listen)(self.api.host, self.handle, kinds) })
-    }
-
-    /// Subscribe to the game's own streams, delivered to
-    /// [`Plugin::on_game_event`](crate::Plugin::on_game_event),
-    /// [`Plugin::on_chat`](crate::Plugin::on_chat) and [`Plugin::on_rpc`](crate::Plugin::on_rpc).
-    ///
-    /// Callable at any time, the last call wins, and [`Streams::NONE`] unsubscribes.
-    ///
-    /// # Errors
-    /// The plugin has no callback for one of the streams it asked for, or the loader could
-    /// not hook the engine on this build — in which case the game is untouched and nothing
-    /// will ever be delivered.
-    pub fn listen_game(&self, streams: Streams) -> Result<(), PluginError> {
-        // SAFETY: valid table pointer.
-        check(unsafe { (self.api.game_listen)(self.api.host, self.handle, streams) })
     }
 
     /// Send input to the system, in order, as one burst.

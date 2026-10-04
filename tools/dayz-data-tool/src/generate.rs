@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 
 use dayz_data::{
-    BuildFile, BuildInfo, OffsetEntry, Pattern, PatternEntry, PatternFile, Provenance, SymbolEntry,
-    SymbolKind, SCHEMA_VERSION,
+    BuildFile, BuildInfo, EventEntry, OffsetEntry, Pattern, PatternEntry, PatternFile, Provenance,
+    SymbolEntry, SymbolKind, SCHEMA_VERSION,
 };
 use serde::Deserialize;
 
@@ -32,6 +32,14 @@ pub struct Seed {
     /// Struct field offsets by name.
     #[serde(default)]
     pub offsets: BTreeMap<String, OffsetEntry>,
+    /// Event classes by the name the engine reports for them.
+    ///
+    /// Copied through unchanged. There is nothing to derive: an event has no address to find
+    /// a pattern for, and a field offset has no bytes to check, so the seed is already the
+    /// finished form. It passes through here only so that one file per build stays the one
+    /// place a person edits.
+    #[serde(default)]
+    pub events: BTreeMap<String, EventEntry>,
 }
 
 /// One seeded address.
@@ -156,6 +164,7 @@ pub fn generate(
         },
         symbols,
         offsets: seed.offsets.clone(),
+        events: seed.events.clone(),
     };
     (
         build,

@@ -384,11 +384,18 @@ unsafe extern "C" fn on_game_event<P: Plugin>(ctx: *mut c_void, event: *const ap
     // SAFETY: documented pointer contracts of this callback.
     let s = unsafe { state::<P>(ctx) };
     // SAFETY: as above; the borrow ends with this call, which is what the ABI promises.
-    let Some(event) = (unsafe { Event::from_abi(event) }) else {
+    let Some(mut described) = (unsafe { Event::from_abi(event) }) else {
         return;
     };
+    // The fields are borrowed from the loader but the slice of them has to live somewhere, so
+    // it lives here: on the stack of the one call that can see it, dropped before returning.
+    let mut fields = Vec::new();
+    // SAFETY: as above.
+    if let Some(read) = unsafe { Event::read_fields(event, &mut fields) } {
+        described.fields = read;
+    }
     guard(s, "on_game_event", |s| {
-        s.plugin.on_game_event(&s.host, &event);
+        s.plugin.on_game_event(&s.host, &described);
     });
 }
 

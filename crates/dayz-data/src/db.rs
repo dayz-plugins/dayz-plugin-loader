@@ -431,6 +431,7 @@ mod tests {
             },
             symbols: std::collections::BTreeMap::new(),
             offsets: std::collections::BTreeMap::new(),
+            events: std::collections::BTreeMap::new(),
         };
         let path = Database::write_build(&dir.0, &file).unwrap_or_else(|e| panic!("{e}"));
         assert!(path.ends_with("builds/1.30.0.json"));

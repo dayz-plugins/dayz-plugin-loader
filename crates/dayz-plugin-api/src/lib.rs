@@ -23,7 +23,9 @@ mod input;
 mod types;
 
 pub use callbacks::{PluginCallbacks, PresentInfo, SwapchainInfo};
-pub use game::{ChatMessage, GameEvent, GameMask, GameResponse, RemoteCall};
+pub use game::{
+    ChatMessage, FieldKind, GameClass, GameEvent, GameField, GameMask, GameResponse, RemoteCall,
+};
 pub use host::{HostApi, LineFn, ReplyFn};
 pub use input::{
     InputAction, InputActionFlags, InputActionKind, InputEvent, InputKind, InputMask,
@@ -46,8 +48,10 @@ pub use types::{
 /// [`HostApi::input_listen`], [`HostApi::input_send`], [`HostApi::input_key_down`],
 /// [`HostApi::input_register_hid`] and the `on_input` callback. 7 added the game's own
 /// streams: [`HostApi::game_listen`], [`GameEvent`], [`ChatMessage`], [`RemoteCall`] and the
-/// `on_game_event`, `on_chat` and `on_rpc` callbacks.
-pub const API_VERSION: u32 = 7;
+/// `on_game_event`, `on_chat` and `on_rpc` callbacks. 8 gave an event its contents:
+/// [`GameField`] on [`GameEvent`], the [`GameClass`] catalogue through
+/// [`HostApi::game_catalogue`], and [`HostApi::chat_local`].
+pub const API_VERSION: u32 = 8;
 
 /// Name of the export every plugin must provide: `extern "C" fn() -> *const PluginInfo`.
 pub const DESCRIBE_EXPORT: &str = "dayz_plugin_describe";

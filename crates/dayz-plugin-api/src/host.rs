@@ -2,7 +2,7 @@
 
 use core::ffi::c_void;
 
-use crate::game::GameMask;
+use crate::game::{GameClass, GameMask};
 use crate::input::{InputAction, InputMask};
 use crate::types::{
     ArgEntry, Bytes, CommandDesc, DialogDesc, EnvEntry, HotkeyDesc, LogLevel, NoticeDesc,
@@ -343,4 +343,40 @@ pub struct HostApi {
     /// hooks would not install — in both cases the game is untouched.
     pub game_listen:
         unsafe extern "C" fn(host: *mut c_void, plugin: PluginHandle, mask: GameMask) -> Status,
+
+    /// Every event class the loader knows the shape of, whether or not it has been raised.
+    ///
+    /// Two calls: `out` null writes the count to `out_count` and returns [`Status::Ok`], then
+    /// a second call with room for that many fills them in. A buffer that is too small is
+    /// filled as far as it goes, `out_count` still receives the true total, and the status is
+    /// [`Status::InvalidArgument`] so the shortfall cannot pass unnoticed.
+    ///
+    /// The strings in the entries belong to the loader's symbol database and last as long as
+    /// the process, so a plugin may keep them. An empty catalogue is not an error: it means
+    /// this build's database has no event section, and the loader will still report events by
+    /// name as they happen.
+    pub game_catalogue: unsafe extern "C" fn(
+        host: *mut c_void,
+        plugin: PluginHandle,
+        out: *mut GameClass,
+        capacity: usize,
+        out_count: *mut usize,
+    ) -> Status,
+
+    /// Put one line in this client's own chat, which no other player and no server sees.
+    ///
+    /// The engine draws it and forgets it: there is no history to delete it from and nothing
+    /// is sent anywhere, so this is the cheapest place to put something a player should read
+    /// in passing. `colour` names one of the game's own colour classes — `ColorImportant`,
+    /// `ColorFriendly`, `ColorEnemy` — and empty takes the game's default.
+    ///
+    /// [`Status::NotFound`] means the game object is not known yet. The loader catches it
+    /// from the engine rather than hunting for it, so it arrives once the engine has
+    /// dispatched a remote call; before that there is nothing to call this on.
+    pub chat_local: unsafe extern "C" fn(
+        host: *mut c_void,
+        plugin: PluginHandle,
+        text: Str,
+        colour: Str,
+    ) -> Status,
 }

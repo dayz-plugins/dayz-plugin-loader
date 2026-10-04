@@ -14,21 +14,77 @@
 //!   returning [`GameResponse::SWALLOW`] keeps the line off the screen.
 //! - [`RemoteCall`] is a mod's own RPC, on its way to script's `OnRPC`.
 //!
-//! What a plugin gets for free is the *name* of an event and, for chat and RPC, the
-//! arguments the engine passed. What it does not get is the inside of an arbitrary event
-//! object: the fields past the class name differ per class, [`GameEvent::event`] is the
-//! pointer to read them from, and doing so needs that class's layout. The loader does not
-//! guess it.
+//! What a plugin gets for free is the *name* of an event, and for the classes the symbol
+//! database has a layout for, its [`fields`](GameEvent::fields) already read and rendered.
+//! An event the database says nothing about still arrives, named, with no fields: the name
+//! comes from the event itself and is right for classes this loader has never heard of,
+//! where a layout is something somebody had to establish. [`GameEvent::event`] is the object,
+//! for a plugin that knows better than the database does.
+//!
+//! [`HostApi::game_catalogue`](crate::HostApi) is the same knowledge up front, before
+//! anything has been raised — which is what a settings panel with a row per event needs.
 
 use core::ffi::c_void;
 
 use crate::types::Str;
 
+/// How one of an event's fields is stored, and what [`GameField::address`] points at.
+///
+/// A `#[repr(transparent)]` integer rather than an enum because a plugin built against a
+/// newer ABI must be able to receive a kind this one has no name for: that reads as
+/// [`FieldKind::UNKNOWN`], whose rendered text is still right.
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FieldKind(pub u32);
+
+impl FieldKind {
+    /// A kind this ABI version has no name for. Only [`GameField::text`] is meaningful.
+    pub const UNKNOWN: FieldKind = FieldKind(0);
+    /// Four-byte signed integer.
+    pub const INT: FieldKind = FieldKind(1);
+    /// Four-byte float.
+    pub const FLOAT: FieldKind = FieldKind(2);
+    /// Four-byte integer holding 0 or 1.
+    pub const BOOL: FieldKind = FieldKind(3);
+    /// Pointer to an engine string holder. Already decoded into [`GameField::text`].
+    pub const STRING: FieldKind = FieldKind(4);
+    /// Three consecutive floats.
+    pub const VECTOR: FieldKind = FieldKind(5);
+    /// Pointer to some other object, reported but not followed.
+    pub const OBJECT: FieldKind = FieldKind(6);
+}
+
+/// One field of one event, read out of the event object and rendered.
+///
+/// [`text`](GameField::text) is the point of this structure and is always set: it is the
+/// value, formatted, and a plugin that logs events needs nothing else. The other two are for
+/// a plugin that wants the value rather than a rendering of it — [`kind`](GameField::kind)
+/// says how it is stored and [`address`](GameField::address) is where, inside the event
+/// object, so reading it typed is a cast and a load.
+///
+/// `address` is the field's own address rather than its value because that is the one answer
+/// with the same meaning for every kind: a `u64` cannot hold three floats, and a field that
+/// reported its value for some kinds and its location for others would be a trap.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct GameField {
+    /// `size_of::<GameField>()`.
+    pub struct_size: usize,
+    /// The field's name, as the engine's own script parameters name it.
+    pub name: Str,
+    /// How it is stored.
+    pub kind: FieldKind,
+    /// The value, formatted. Valid for the duration of the call.
+    pub text: Str,
+    /// Where the field is, inside the event object. Readable for the duration of the call.
+    pub address: u64,
+}
+
 /// What a plugin is told about one event the engine raised.
 ///
 /// `name` is the event's own class name, read out of the event through its virtual table, so
 /// it is right for classes this loader has never heard of. `event` is the object itself,
-/// valid only for the duration of the call.
+/// valid only for the duration of the call, and so is everything `fields` points at.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct GameEvent {
@@ -36,8 +92,34 @@ pub struct GameEvent {
     pub struct_size: usize,
     /// Class name, for example `ChatMessageEvent` or `MPConnectionCloseEvent`.
     pub name: Str,
-    /// The `enf::Event` object. Reading past the class name needs that class's layout.
+    /// The `enf::Event` object.
     pub event: *mut c_void,
+    /// The decoded fields, in the order the engine's own script parameters list them.
+    ///
+    /// Null with a count of zero for a class the symbol database has no layout for, which is
+    /// most of them. That is "nobody has established this one yet", not "it has no fields".
+    pub fields: *const GameField,
+    /// How many [`GameEvent::fields`] there are.
+    pub field_count: usize,
+}
+
+/// One event class the loader knows the shape of, whether or not it has been raised.
+///
+/// Returned in a block by [`HostApi::game_catalogue`](crate::HostApi). The strings belong to
+/// the loader and last as long as the symbol database does, which is the life of the process,
+/// so unlike the fields on a live [`GameEvent`] these may be kept.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct GameClass {
+    /// `size_of::<GameClass>()`.
+    pub struct_size: usize,
+    /// The class name, which is the key: it is what [`GameEvent::name`] will be.
+    pub name: Str,
+    /// What the event means, or empty.
+    pub note: Str,
+    /// How many fields the loader can decode for it. Zero for a class that is known by name
+    /// only.
+    pub field_count: usize,
 }
 
 /// One chat line, as the engine was about to show it.
@@ -147,6 +229,26 @@ mod tests {
             assert!(GameMask::ALL.covers(one), "{one:?}");
             assert!(!GameMask::NONE.covers(one), "{one:?}");
         }
+    }
+
+    #[test]
+    fn an_unnamed_field_kind_is_distinguishable_from_every_named_one() {
+        let named = [
+            FieldKind::INT,
+            FieldKind::FLOAT,
+            FieldKind::BOOL,
+            FieldKind::STRING,
+            FieldKind::VECTOR,
+            FieldKind::OBJECT,
+        ];
+        for kind in named {
+            assert_ne!(kind, FieldKind::UNKNOWN, "{kind:?}");
+        }
+        assert_eq!(
+            FieldKind(u32::MAX),
+            FieldKind(u32::MAX),
+            "a kind from a newer ABI is carried, not rejected"
+        );
     }
 
     #[test]

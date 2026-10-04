@@ -25,13 +25,17 @@ pub use db::{sha256_file, Database, DatabaseError, Identity, MatchedBy};
 pub use pattern::{Pattern, PatternError};
 pub use resolve::{Resolve, ResolveError};
 pub use schema::{
-    BuildFile, BuildInfo, OffsetEntry, PatternEntry, PatternFile, Provenance, SymbolEntry,
-    SymbolKind,
+    BuildFile, BuildInfo, EventEntry, EventField, FieldKind, OffsetEntry, PatternEntry,
+    PatternFile, Provenance, SymbolEntry, SymbolKind,
 };
 pub use table::{Issue, Origin, Resolved, SymbolTable};
 
 /// Schema version this crate reads and writes.
-pub const SCHEMA_VERSION: u32 = 1;
+///
+/// 2 added [`BuildFile::events`]. A file still saying 1 reads fine — the section defaults to
+/// empty — so the bump only stops an older loader from being handed a file it would silently
+/// drop the events out of.
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Directory name the loader looks for inside the game folder.
 pub const DIRECTORY_NAME: &str = "data";

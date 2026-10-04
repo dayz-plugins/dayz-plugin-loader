@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use crate::pattern::Pattern;
-use crate::schema::{BuildFile, PatternFile, SymbolEntry, SymbolKind};
+use crate::schema::{BuildFile, EventEntry, PatternFile, SymbolEntry, SymbolKind};
 
 /// Where a resolved address came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,6 +105,7 @@ impl std::fmt::Display for Issue {
 pub struct SymbolTable {
     symbols: BTreeMap<String, Resolved>,
     offsets: BTreeMap<String, u64>,
+    events: BTreeMap<String, EventEntry>,
     issues: Vec<Issue>,
 }
 
@@ -132,6 +133,12 @@ impl SymbolTable {
             for (name, entry) in &build.offsets {
                 table.offsets.insert(name.clone(), entry.value);
             }
+            // Events are taken as given. There is nothing here to verify them against: a
+            // field offset leaves no bytes at a known address to check, and the vtable RVA is
+            // not what the loader finds events by. The check happens later and better — the
+            // loader looks an event up by the name the engine itself just reported, so an
+            // entry for a class this build no longer has is never reached.
+            table.events = build.events.clone();
         }
         for (name, entry) in &patterns.symbols {
             if table.symbols.contains_key(name) {
@@ -217,6 +224,12 @@ impl SymbolTable {
         self.offsets.get(name).copied()
     }
 
+    /// What is known about one event class, by the name the engine reports for it.
+    #[must_use]
+    pub fn event(&self, name: &str) -> Option<&EventEntry> {
+        self.events.get(name)
+    }
+
     /// Every resolved symbol, sorted by name.
     pub fn symbols(&self) -> impl Iterator<Item = (&str, Resolved)> {
         self.symbols
@@ -229,6 +242,14 @@ impl SymbolTable {
         self.offsets
             .iter()
             .map(|(name, value)| (name.as_str(), *value))
+    }
+
+    /// Every event class, sorted by name. This is how a plugin gets the whole list up front,
+    /// before any of them has been raised — which is what a per-event settings panel needs.
+    pub fn events(&self) -> impl Iterator<Item = (&str, &EventEntry)> {
+        self.events
+            .iter()
+            .map(|(name, entry)| (name.as_str(), entry))
     }
 
     /// Everything that needs a person's attention.
@@ -300,6 +321,7 @@ mod tests {
                 },
             )]
             .into(),
+            events: BTreeMap::new(),
         }
     }
 
