@@ -50,8 +50,9 @@ pub use types::{
 /// streams: [`HostApi::game_listen`], [`GameEvent`], [`ChatMessage`], [`RemoteCall`] and the
 /// `on_game_event`, `on_chat` and `on_rpc` callbacks. 8 gave an event its contents:
 /// [`GameField`] on [`GameEvent`], the [`GameClass`] catalogue through
-/// [`HostApi::game_catalogue`], and [`HostApi::chat_local`].
-pub const API_VERSION: u32 = 8;
+/// [`HostApi::game_catalogue`], and [`HostApi::chat_local`]. 9 added
+/// [`UiWidget::Toggles`], a labelled row of checkboxes.
+pub const API_VERSION: u32 = 9;
 
 /// Name of the export every plugin must provide: `extern "C" fn() -> *const PluginInfo`.
 pub const DESCRIBE_EXPORT: &str = "dayz_plugin_describe";

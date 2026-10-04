@@ -103,6 +103,27 @@ impl Ui {
         changed
     }
 
+    /// A labelled row of checkboxes over the bits of `bits`, lowest bit leftmost.
+    ///
+    /// For a settings matrix: a row per thing, a column per destination, drawn under a
+    /// header naming the columns. `count` is how many boxes, 1 to 32, and `label_width`
+    /// reserves that many points for the label so the columns line up down the panel — zero
+    /// takes a default. Returns whether anything changed.
+    pub fn toggles(&self, text: &str, bits: &mut i64, count: u32, label_width: f32) -> bool {
+        let mut value = UiValue {
+            integer: *bits,
+            max: f64::from(count),
+            min: f64::from(label_width),
+            ..UiValue::new()
+        };
+        if self.call(UiWidget::Toggles, text, Some(&mut value)) != Status::Ok {
+            return false;
+        }
+        let changed = value.integer != *bits;
+        *bits = value.integer;
+        changed
+    }
+
     /// A slider over the caller's own float. Returns whether it changed.
     pub fn slider(&self, text: &str, current: &mut f32, min: f32, max: f32) -> bool {
         let mut value = UiValue {

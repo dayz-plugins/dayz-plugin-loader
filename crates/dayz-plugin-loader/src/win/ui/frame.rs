@@ -16,6 +16,13 @@ use crate::win::{dispatch, state};
 /// Widest integer range that still makes sense as a slider; above it, a number field.
 const SLIDER_STEPS: f64 = 1000.0;
 
+/// Most toggles one [`UiWidget::Toggles`] row can hold, which is the bits of its `i64`
+/// minus the sign.
+const MAX_TOGGLES: u32 = 32;
+
+/// Label column width for a toggle row when the caller does not pick one.
+const TOGGLE_LABEL_WIDTH: f32 = 220.0;
+
 thread_local! {
     /// The panel body currently being filled on this thread, if any.
     static CURRENT: Cell<(u64, *mut egui::Ui)> = const { Cell::new((0, core::ptr::null_mut())) };
@@ -108,10 +115,54 @@ pub(crate) fn widget(
             None => Status::InvalidArgument,
         },
         UiWidget::Setting => setting(ui, caller, text),
+        UiWidget::Toggles => match value {
+            Some(out) => {
+                out.integer = toggles(ui, text, out.integer, out.max, out.min);
+                Status::Ok
+            }
+            None => Status::InvalidArgument,
+        },
         // A plugin built against a newer ABI asking for a widget this loader does not know.
         _ => Status::Unsupported,
     });
     outcome.unwrap_or(Status::WrongPhase)
+}
+
+/// A labelled row of checkboxes over the bits of one integer.
+///
+/// The label gets a fixed-width column of its own rather than being laid out naturally,
+/// because the point of a row of these is the column of boxes underneath it: a label that
+/// sets its own width would stagger every row by a few pixels and make a matrix unreadable.
+fn toggles(ui: &mut egui::Ui, text: &str, bits: i64, count: f64, label_width: f64) -> i64 {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let count = (count.max(1.0) as u32).min(MAX_TOGGLES);
+    #[allow(clippy::cast_possible_truncation)]
+    let width = if label_width > 0.0 {
+        label_width as f32
+    } else {
+        TOGGLE_LABEL_WIDTH
+    };
+    let mut bits = bits;
+    ui.horizontal(|ui| {
+        let height = ui.spacing().interact_size.y;
+        let layout = egui::Layout::left_to_right(egui::Align::Center);
+        ui.allocate_ui_with_layout(egui::vec2(width, height), layout, |ui| {
+            // Truncating rather than wrapping: a wrapped label would make this row taller
+            // than its neighbours, which is the thing the fixed column exists to prevent.
+            ui.add(egui::Label::new(text).truncate());
+        });
+        for index in 0..count {
+            let mask = 1i64 << index;
+            let mut on = bits & mask != 0;
+            ui.checkbox(&mut on, "");
+            if on {
+                bits |= mask;
+            } else {
+                bits &= !mask;
+            }
+        }
+    });
+    bits
 }
 
 /// The right control for a registered setting, with the loader doing the writing.

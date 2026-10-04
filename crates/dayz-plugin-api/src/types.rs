@@ -380,6 +380,18 @@ pub enum UiWidget {
     /// widget, validates and persists the change and fires `on_setting_changed`. Ignores
     /// `value`.
     Setting = 8,
+    /// A labelled row of checkboxes, one per bit of `value.integer`, read and written.
+    ///
+    /// `value.max` is how many boxes to draw, 1 to 32, and `value.min` is the width in
+    /// points to reserve for the label so that the boxes line up down a panel — zero takes
+    /// a default. `text` is the row's label.
+    ///
+    /// This exists because a settings matrix — a row per thing, a column per destination —
+    /// is the one layout the one-widget-per-call shape cannot express, and the alternative
+    /// was nested layout state that has to be kept consistent across calls. A row of related
+    /// toggles is also what such a matrix *is*: the bits belong together, and handing them
+    /// over as one integer means a plugin stores one value per row instead of five.
+    Toggles = 9,
 }
 
 /// The value a widget reads, writes, or both. Fields a widget does not use are ignored.
