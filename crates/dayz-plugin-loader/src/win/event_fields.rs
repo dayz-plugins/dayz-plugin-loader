@@ -87,6 +87,7 @@ fn kind_of(kind: DataKind) -> FieldKind {
         DataKind::String => FieldKind::STRING,
         DataKind::Vector => FieldKind::VECTOR,
         DataKind::Object => FieldKind::OBJECT,
+        DataKind::CString => FieldKind::CSTRING,
         _ => FieldKind::UNKNOWN,
     }
 }
@@ -165,14 +166,27 @@ fn render(address: usize, kind: FieldKind, layout: &Layout) -> String {
         FieldKind::FLOAT => {
             gamemem::read_f32(address).map_or_else(unreadable, |raw| format!("{raw}"))
         }
-        FieldKind::BOOL => gamemem::read_u32(address).map_or_else(unreadable, |raw| match raw {
+        // One byte, not four: the engine's own dispatcher reads these as `*(undefined1 *)`.
+        FieldKind::BOOL => gamemem::read_u8(address).map_or_else(unreadable, |raw| match raw {
             0 => "false".to_owned(),
             1 => "true".to_owned(),
             // Not a bool after all. Saying so is better than calling it true.
             other => format!("{other} (not a boolean)"),
         }),
-        FieldKind::STRING => gamemem::read_pointer(address)
-            .map_or_else(unreadable, |holder| gamemem::holder_string(holder, layout)),
+        FieldKind::STRING => gamemem::read_pointer(address).map_or_else(unreadable, |holder| {
+            one_line(&gamemem::holder_string(holder, layout))
+        }),
+        // The other kind of string: the field holds the characters' address directly, with no
+        // holder in between. Reading one as the other gives nothing, which is how this kind
+        // came to exist — `ScriptLogEvent` logged every line as empty until it was separated
+        // out.
+        FieldKind::CSTRING => gamemem::read_pointer(address).map_or_else(unreadable, |text| {
+            if text == 0 {
+                return String::new();
+            }
+            gamemem::read_c_string(text, gamemem::MAX_STRING)
+                .map_or_else(unreadable, |text| one_line(&text))
+        }),
         FieldKind::VECTOR => {
             let axes = [0usize, 4, 8].map(|step| {
                 address
@@ -194,6 +208,21 @@ fn render(address: usize, kind: FieldKind, layout: &Layout) -> String {
         // A kind from a newer database than this loader. The bytes are still worth having.
         _ => gamemem::read_u32(address).map_or_else(unreadable, |raw| format!("{raw:#010X}")),
     }
+}
+
+/// A decoded string as one line.
+///
+/// A string out of the game can contain anything, and some of them do: `ScriptLogEvent` is a
+/// log line the engine has already appended a newline to, which would otherwise end a field
+/// in the middle of whatever is reading it — a log file's line, a toast, a chat message. The
+/// trailing run goes, and anything left inside is escaped rather than dropped, so a multi-line
+/// value is still legible and still one field.
+fn one_line(text: &str) -> String {
+    text.trim_end()
+        .replace('\\', "\\\\")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
 }
 
 /// What an unreadable field renders as. A whole word rather than an empty string, so a log
@@ -247,6 +276,7 @@ mod tests {
             (DataKind::String, FieldKind::STRING),
             (DataKind::Vector, FieldKind::VECTOR),
             (DataKind::Object, FieldKind::OBJECT),
+            (DataKind::CString, FieldKind::CSTRING),
         ];
         for (from, to) in pairs {
             assert_eq!(kind_of(from), to, "{from:?}");
@@ -264,6 +294,7 @@ mod tests {
             FieldKind::FLOAT,
             FieldKind::BOOL,
             FieldKind::STRING,
+            FieldKind::CSTRING,
             FieldKind::OBJECT,
             FieldKind::UNKNOWN,
         ];
@@ -272,6 +303,22 @@ mod tests {
         }
         // A vector is three reads, so it reports per axis instead of all or nothing.
         assert_eq!(render(0, FieldKind::VECTOR, &layout()), "<?, ?, ?>");
+    }
+
+    #[test]
+    fn a_decoded_string_cannot_break_the_line_it_is_written_on() {
+        // What the engine actually hands over for a script log line.
+        assert_eq!(one_line("SCRIPT : loaded\n"), "SCRIPT : loaded");
+        assert_eq!(one_line("a\nb"), "a\\nb");
+        assert_eq!(one_line("a\r\nb\tc"), "a\\r\\nb\\tc");
+        // The escape character itself, so an escaped value cannot be mistaken for a real one.
+        assert_eq!(one_line("a\\nb"), "a\\\\nb");
+        assert_eq!(one_line(""), "");
+        assert_eq!(one_line("\n\n\n"), "");
+        for rendered in [one_line("x\ny"), one_line("x\r\ny")] {
+            assert!(!rendered.contains('\n'), "{rendered:?}");
+            assert!(!rendered.contains('\r'), "{rendered:?}");
+        }
     }
 
     #[test]

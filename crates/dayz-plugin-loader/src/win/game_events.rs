@@ -276,7 +276,7 @@ fn decode_name(vtable: usize, layout: &Layout) -> Option<Box<str>> {
     let literal = getter
         .checked_add(NAME_HEAD.len() + 4)?
         .checked_add_signed(displacement as isize)?;
-    gamemem::read_c_string(literal)
+    gamemem::read_c_string(literal, gamemem::MAX_NAME)
 }
 
 /// The class name of one event, decoding it the first time its class is seen.

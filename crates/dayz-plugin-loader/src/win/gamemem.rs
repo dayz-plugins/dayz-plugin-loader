@@ -86,6 +86,15 @@ pub(super) fn read_pointer(address: usize) -> Option<usize> {
     Some(unsafe { (address as *const usize).read_unaligned() })
 }
 
+/// One byte from the game's memory, if it is there to read.
+pub(super) fn read_u8(address: usize) -> Option<u8> {
+    if !readable(address, 1) {
+        return None;
+    }
+    // SAFETY: one committed, readable byte, checked immediately above.
+    Some(unsafe { (address as *const u8).read() })
+}
+
 /// Four bytes from the game's memory, if they are there to read.
 pub(super) fn read_u32(address: usize) -> Option<u32> {
     if !readable(address, 4) {
@@ -100,13 +109,17 @@ pub(super) fn read_f32(address: usize) -> Option<f32> {
     read_u32(address).map(f32::from_bits)
 }
 
-/// A NUL terminated string from the game's memory, at most [`MAX_NAME`] bytes.
-pub(super) fn read_c_string(address: usize) -> Option<Box<str>> {
+/// A NUL terminated string from the game's memory, at most `limit` bytes.
+///
+/// Byte at a time, with a readability check for each, because the length is not known in
+/// advance: a string that runs up to the end of a page would otherwise be a fault on the
+/// read that looks one byte past it.
+pub(super) fn read_c_string(address: usize, limit: usize) -> Option<Box<str>> {
     if !readable(address, 1) {
         return None;
     }
     let mut bytes = Vec::new();
-    for step in 0..MAX_NAME {
+    for step in 0..limit {
         let at = address.checked_add(step)?;
         if !readable(at, 1) {
             return None;
@@ -190,7 +203,7 @@ mod tests {
         assert!(read_pointer(0).is_none());
         assert!(read_u32(0).is_none());
         assert!(read_f32(0).is_none());
-        assert!(read_c_string(0).is_none());
+        assert!(read_c_string(0, MAX_NAME).is_none());
     }
 
     #[test]

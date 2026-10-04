@@ -44,7 +44,7 @@ impl FieldKind {
     pub const INT: FieldKind = FieldKind(1);
     /// Four-byte float.
     pub const FLOAT: FieldKind = FieldKind(2);
-    /// Four-byte integer holding 0 or 1.
+    /// One byte holding 0 or 1.
     pub const BOOL: FieldKind = FieldKind(3);
     /// Pointer to an engine string holder. Already decoded into [`GameField::text`].
     pub const STRING: FieldKind = FieldKind(4);
@@ -52,6 +52,9 @@ impl FieldKind {
     pub const VECTOR: FieldKind = FieldKind(5);
     /// Pointer to some other object, reported but not followed.
     pub const OBJECT: FieldKind = FieldKind(6);
+    /// Bare `char *`. Also already decoded into [`GameField::text`]; the engine uses both
+    /// this and [`FieldKind::STRING`] and they are not interchangeable.
+    pub const CSTRING: FieldKind = FieldKind(7);
 }
 
 /// One field of one event, read out of the event object and rendered.
@@ -240,6 +243,7 @@ mod tests {
             FieldKind::STRING,
             FieldKind::VECTOR,
             FieldKind::OBJECT,
+            FieldKind::CSTRING,
         ];
         for kind in named {
             assert_ne!(kind, FieldKind::UNKNOWN, "{kind:?}");

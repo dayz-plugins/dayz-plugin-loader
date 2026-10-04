@@ -109,11 +109,21 @@ pub struct OffsetEntry {
 
 /// How to read one field out of an event object, and how to render what is there.
 ///
-/// This is the engine's storage type, not script's: a script `bool` is a four-byte int in the
-/// object, and script's `vector` is three consecutive floats. Anything that is a pointer to
-/// something with its own class — `PlayerIdentity`, `Man`, `Serializer` — is [`FieldKind::Object`],
-/// because following one means knowing that class's layout too, which is a separate question
-/// from this one.
+/// This is the engine's storage type, not script's. The distinctions that matter, all of them
+/// read off the engine's own event-to-`Param` dispatcher rather than assumed:
+///
+/// - A script `bool` is **one** byte, not four: the dispatcher reads `authfailed` as
+///   `*(undefined1 *)(event + 0x1C)`.
+/// - Script's `vector` is three consecutive floats, inline.
+/// - There are **two** kinds of string. Most are [`FieldKind::String`], a pointer to an
+///   Enfusion string holder, which the dispatcher dereferences as `*(event + N) + 0x10`. A
+///   few are [`FieldKind::CString`], a bare `char *`, where it uses `*(event + N)` with no
+///   further offset. They are indistinguishable from the offset alone and one read as the
+///   other yields nothing, so the kind is where that fact is kept.
+///
+/// Anything that is a pointer to something with its own class — `PlayerIdentity`, `Man`,
+/// `Serializer` — is [`FieldKind::Object`], because following one means knowing that class's
+/// layout too, which is a separate question from this one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
@@ -123,10 +133,12 @@ pub enum FieldKind {
     Int,
     /// Four-byte float.
     Float,
-    /// Four-byte integer holding 0 or 1.
+    /// One byte holding 0 or 1.
     Bool,
     /// Pointer to an engine string holder, or null for the empty string.
     String,
+    /// Bare `char *`, NUL terminated, or null for the empty string.
+    CString,
     /// Three consecutive floats.
     Vector,
     /// Pointer to some other object. Reported as the address; not followed.
