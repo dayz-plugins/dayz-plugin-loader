@@ -385,7 +385,13 @@ fn engine_string(holder: *mut *mut c_void, layout: &Layout) -> String {
     // SAFETY: `length` bytes from `data` are committed and readable, checked above, and
     // `length` came from the holder's own length field rather than from a scan.
     let bytes = unsafe { core::slice::from_raw_parts(data as *const u8, length) };
-    String::from_utf8_lossy(bytes).into_owned()
+    // The holder's length counts the terminator — the allocator stores `strlen + 1` and copies
+    // that many bytes — so the characters are one short of it. Cutting at the first NUL rather
+    // than just dropping the last byte, because that is right either way: if a build ever
+    // stored the bare `strlen` this still returns the text instead of appending whatever
+    // follows it.
+    let text = bytes.split(|byte| *byte == 0).next().unwrap_or(bytes);
+    String::from_utf8_lossy(text).into_owned()
 }
 
 /// Hand one event to every plugin that asked for events.
@@ -619,6 +625,23 @@ mod tests {
         };
         let literal = getter + NAME_HEAD.len() + 4 + offset;
         assert_eq!(literal, 0x00CE_7420);
+    }
+
+    /// The holder's length field counts the terminator, which a live session caught: the
+    /// first chat line through the hook came out as `Survivor\0` because this read one byte
+    /// too many. The slicing is pulled out here so it is pinned down without a game.
+    #[test]
+    fn a_holders_characters_stop_at_the_terminator() {
+        let cut = |bytes: &[u8]| {
+            String::from_utf8_lossy(bytes.split(|b| *b == 0).next().unwrap_or(bytes)).into_owned()
+        };
+        // What the engine actually stores: "Survivor" with length 9, the terminator included.
+        assert_eq!(cut(b"Survivor\0"), "Survivor");
+        // And if a build ever stored the bare strlen, the text is still right.
+        assert_eq!(cut(b"Survivor"), "Survivor");
+        // An empty holder, which the engine writes as a null pointer rather than this.
+        assert_eq!(cut(b"\0"), "");
+        assert_eq!(cut(b""), "");
     }
 
     #[test]
