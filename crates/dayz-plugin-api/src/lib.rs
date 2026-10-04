@@ -17,11 +17,13 @@
 use core::ffi::c_void;
 
 mod callbacks;
+mod game;
 mod host;
 mod input;
 mod types;
 
 pub use callbacks::{PluginCallbacks, PresentInfo, SwapchainInfo};
+pub use game::{ChatMessage, GameEvent, GameMask, GameResponse, RemoteCall};
 pub use host::{HostApi, LineFn, ReplyFn};
 pub use input::{
     InputAction, InputActionFlags, InputActionKind, InputEvent, InputKind, InputMask,
@@ -42,8 +44,10 @@ pub use types::{
 /// toasts, notices and dialogs: [`HostApi::notice_show`], [`HostApi::dialog_open`],
 /// [`HostApi::ui_close`] and the `on_dialog` callback. 6 added the input stream:
 /// [`HostApi::input_listen`], [`HostApi::input_send`], [`HostApi::input_key_down`],
-/// [`HostApi::input_register_hid`] and the `on_input` callback.
-pub const API_VERSION: u32 = 6;
+/// [`HostApi::input_register_hid`] and the `on_input` callback. 7 added the game's own
+/// streams: [`HostApi::game_listen`], [`GameEvent`], [`ChatMessage`], [`RemoteCall`] and the
+/// `on_game_event`, `on_chat` and `on_rpc` callbacks.
+pub const API_VERSION: u32 = 7;
 
 /// Name of the export every plugin must provide: `extern "C" fn() -> *const PluginInfo`.
 pub const DESCRIBE_EXPORT: &str = "dayz_plugin_describe";

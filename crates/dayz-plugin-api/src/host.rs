@@ -2,6 +2,7 @@
 
 use core::ffi::c_void;
 
+use crate::game::GameMask;
 use crate::input::{InputAction, InputMask};
 use crate::types::{
     ArgEntry, Bytes, CommandDesc, DialogDesc, EnvEntry, HotkeyDesc, LogLevel, NoticeDesc,
@@ -329,4 +330,17 @@ pub struct HostApi {
         usage_page: u16,
         usage: u16,
     ) -> Status,
+
+    /// Subscribe to the game's own streams: its events, its chat, its remote calls.
+    ///
+    /// Delivered to `on_game_event`, `on_chat` and `on_rpc` respectively. Callable at any
+    /// time, the last call wins, and [`GameMask::NONE`] unsubscribes. A plugin asking for a
+    /// stream it has no callback for is refused.
+    ///
+    /// The loader installs its hooks on the engine the first time anything subscribes, so a
+    /// mask that asks for nothing costs nothing. [`Status::Unsupported`] means the addresses
+    /// for this build are not in `dayz-data`, and [`Status::NotFound`] that they are but the
+    /// hooks would not install — in both cases the game is untouched.
+    pub game_listen:
+        unsafe extern "C" fn(host: *mut c_void, plugin: PluginHandle, mask: GameMask) -> Status,
 }

@@ -150,6 +150,9 @@ pub struct State {
     pub read_lines: fn(&str, Option<usize>) -> Vec<String>,
     /// Produces the lines the `input` command prints: who watches the input stream.
     pub input_lines: fn() -> Vec<String>,
+    /// Produces the lines the `game` command prints: which of the game's own streams are
+    /// hooked and who listens to them. A function pointer for the same reason as the rest.
+    pub game_lines: fn() -> Vec<String>,
     /// Performs `connect`, `disconnect` and `quit`, and returns what to print.
     ///
     /// A function pointer for the same reason as the four above: driving the game's session
@@ -171,6 +174,11 @@ fn no_memory(_target: &str, _count: Option<usize>) -> Vec<String> {
 
 /// Default for [`State::input_lines`]: no platform layer, so no window to watch.
 fn no_input() -> Vec<String> {
+    Vec::new()
+}
+
+/// Default for [`State::game_lines`]: no platform layer, so nothing is hooked.
+fn no_game() -> Vec<String> {
     Vec::new()
 }
 
@@ -213,6 +221,7 @@ impl State {
             hook_lines: no_hooks,
             read_lines: no_memory,
             input_lines: no_input,
+            game_lines: no_game,
             session: no_session,
         }
     }

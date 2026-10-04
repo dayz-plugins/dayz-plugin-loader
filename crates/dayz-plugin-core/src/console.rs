@@ -148,6 +148,8 @@ pub enum Line {
     Hooks,
     /// `input`: who is listening to the input stream, and how much they have swallowed.
     Input,
+    /// `game`: which of the game's own streams are hooked, and who is listening to them.
+    Game,
     /// `read <target> [count]`: dump game memory. The target is left as typed, because what
     /// a symbol name resolves to is the platform layer's business, not the grammar's.
     Read(String, Option<usize>),
@@ -229,6 +231,7 @@ pub fn parse(line: &str) -> Result<Line, ParseError> {
         "symbols" | "syms" => Line::Symbols(optional(rest)),
         "hooks" => Line::Hooks,
         "input" => Line::Input,
+        "game" => Line::Game,
         "read" => {
             let (target, count) = split_word(rest);
             if target.is_empty() {
@@ -277,6 +280,7 @@ pub const BUILTIN_NAMES: &[&str] = &[
     "symbols",
     "hooks",
     "input",
+    "game",
     "read",
     "get",
     "set",
@@ -322,6 +326,10 @@ pub const BUILTIN_HELP: &[(&str, &str)] = &[
     ),
     ("input", "Show which plugins watch the input stream."),
     (
+        "game",
+        "Show which of the game's own streams are hooked and watched.",
+    ),
+    (
         "read [*]<symbol|0xaddr>[+off] [bytes]",
         "Dump game memory; * reads the pointer there first.",
     ),
@@ -344,6 +352,11 @@ mod tests {
     #[test]
     fn input_is_a_bare_word() {
         assert_eq!(parse("input"), Ok(Line::Input));
+    }
+
+    #[test]
+    fn game_is_a_bare_word() {
+        assert_eq!(parse("game"), Ok(Line::Game));
     }
 
     #[test]

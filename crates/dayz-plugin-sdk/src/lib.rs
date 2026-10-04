@@ -30,6 +30,7 @@
 mod deps;
 mod dialogs;
 mod ffi;
+mod game;
 mod host;
 mod input;
 mod logger;
@@ -40,6 +41,7 @@ mod ui;
 pub use dayz_plugin_api as api;
 pub use deps::Dependency;
 pub use dialogs::{Dialog, Notice, Shown};
+pub use game::{Chat, ChatVerdict, Event, Rpc, Streams};
 pub use host::{Arg, CommandLine, Hook, Host, PluginError, PluginRef};
 pub use input::{Action, Held, Input, Verdict, Watch};
 pub use plugin::{Plugin, PresentInfo, SwapchainInfo};

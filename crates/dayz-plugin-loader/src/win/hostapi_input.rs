@@ -1,17 +1,18 @@
-//! The input half of the [`HostApi`](dayz_plugin_api::HostApi) table.
+//! The input half of the [`HostApi`](dayz_plugin_api::HostApi) table, and the subscription
+//! to the game's own streams, which works the same way.
 //!
-//! Separate from `hostapi.rs` for size, and because none of these four touch the loader
-//! state: subscriptions live in [`super::plugin_input`] behind their own lock, and sending
-//! goes straight to the system.
+//! Separate from `hostapi.rs` for size, and because none of these touch the loader state:
+//! subscriptions live in [`super::plugin_input`] and [`super::game_events`] behind their own
+//! locks, and sending goes straight to the system.
 
 // FFI module: the functions here are called by plugins through raw pointers.
 #![allow(unsafe_code)]
 
 use core::ffi::c_void;
 
-use dayz_plugin_api::{InputAction, InputMask, PluginHandle, Status};
+use dayz_plugin_api::{GameMask, InputAction, InputMask, PluginHandle, Status};
 
-use super::{input_send, plugin_input, plugins};
+use super::{game_events, input_send, plugin_input, plugins};
 
 /// `HostApi::input_listen`.
 pub(super) unsafe extern "C" fn input_listen(
@@ -21,8 +22,16 @@ pub(super) unsafe extern "C" fn input_listen(
 ) -> Status {
     // A subscription without a callback would be a plugin waiting for events that cannot be
     // delivered; saying so is better than silently never calling it.
-    let has_callback = plugins::find(plugin).is_some_and(|p| p.callbacks.on_input.is_some());
-    if !has_callback && mask != InputMask::NONE {
+    //
+    // Only when it can be told, though. A plugin that subscribes from its own `start` — the
+    // ordinary place to do it — is not in the active list yet, because plugins are published
+    // once the whole batch has started, and its callback table is still being filled in by
+    // the call this is running inside. "Not found" there is not a missing callback, and
+    // refusing it would mean the one subscription that cannot be checked is the one that
+    // fails. Delivery skips a plugin with no callback regardless, so the unchecked case is
+    // only a lost error message.
+    let unusable = plugins::find(plugin).is_some_and(|p| p.callbacks.on_input.is_none());
+    if unusable && mask != InputMask::NONE {
         return Status::InvalidArgument;
     }
     plugin_input::listen(plugin, mask)
@@ -74,4 +83,28 @@ pub(super) unsafe extern "C" fn input_register_hid(
     usage: u16,
 ) -> Status {
     input_send::register_hid(super::game_window(), usage_page, usage)
+}
+
+/// `HostApi::game_listen`.
+pub(super) unsafe extern "C" fn game_listen(
+    _host: *mut c_void,
+    plugin: PluginHandle,
+    mask: GameMask,
+) -> Status {
+    // Asking for a stream with no callback to deliver it to is refused for the same reason as
+    // it is for input, and checked only when it can be — see [`input_listen`] for why a
+    // plugin subscribing from its own `start` is not findable yet.
+    let missing = plugins::find(plugin).is_some_and(|active| {
+        [
+            (GameMask::EVENTS, active.callbacks.on_game_event.is_none()),
+            (GameMask::CHAT, active.callbacks.on_chat.is_none()),
+            (GameMask::RPC, active.callbacks.on_rpc.is_none()),
+        ]
+        .into_iter()
+        .any(|(stream, absent)| mask.covers(stream) && absent)
+    });
+    if missing {
+        return Status::InvalidArgument;
+    }
+    game_events::listen(plugin, mask)
 }

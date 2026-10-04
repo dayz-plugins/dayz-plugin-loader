@@ -15,6 +15,7 @@ use dayz_plugin_api::{
 };
 pub use dayz_plugin_core::cmdline::{Arg, CommandLine};
 
+use crate::game::Streams;
 use crate::input::{Action, Watch};
 use crate::settings::{Setting, SettingKind};
 
@@ -123,6 +124,19 @@ pub(crate) fn bytes_from<'a>(b: Bytes) -> &'a [u8] {
     // SAFETY: the loader guarantees ptr/len describe readable memory for the current call;
     // callers only use the slice within that call.
     unsafe { core::slice::from_raw_parts(b.ptr, b.len) }
+}
+
+/// View a borrowed [`Str`] the loader passed us, without copying it.
+///
+/// Invalid UTF-8 reads as empty rather than panicking: the loader converts every string it
+/// sends, so a string that is not UTF-8 here would be a loader bug, and an empty line is a
+/// better answer to one than a dead plugin.
+pub(crate) fn str_ref<'a>(s: Str) -> &'a str {
+    core::str::from_utf8(bytes_from(Bytes {
+        ptr: s.ptr,
+        len: s.len,
+    }))
+    .unwrap_or_default()
 }
 
 impl Host {
@@ -707,6 +721,21 @@ impl Host {
     pub fn listen_input(&self, kinds: Watch) -> Result<(), PluginError> {
         // SAFETY: valid table pointer.
         check(unsafe { (self.api.input_listen)(self.api.host, self.handle, kinds) })
+    }
+
+    /// Subscribe to the game's own streams, delivered to
+    /// [`Plugin::on_game_event`](crate::Plugin::on_game_event),
+    /// [`Plugin::on_chat`](crate::Plugin::on_chat) and [`Plugin::on_rpc`](crate::Plugin::on_rpc).
+    ///
+    /// Callable at any time, the last call wins, and [`Streams::NONE`] unsubscribes.
+    ///
+    /// # Errors
+    /// The plugin has no callback for one of the streams it asked for, or the loader could
+    /// not hook the engine on this build — in which case the game is untouched and nothing
+    /// will ever be delivered.
+    pub fn listen_game(&self, streams: Streams) -> Result<(), PluginError> {
+        // SAFETY: valid table pointer.
+        check(unsafe { (self.api.game_listen)(self.api.host, self.handle, streams) })
     }
 
     /// Send input to the system, in order, as one burst.

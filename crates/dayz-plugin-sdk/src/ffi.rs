@@ -14,6 +14,7 @@ use dayz_plugin_api::{
 };
 
 use crate::dialogs::Shown;
+use crate::game::{Chat, ChatVerdict, Event, Rpc};
 use crate::host::{bytes_from, str_from, Host, PluginError, PluginRef};
 use crate::input::Input;
 use crate::logger::HostLogger;
@@ -155,6 +156,9 @@ pub unsafe fn start<P: Plugin>(
             on_ui: Some(on_ui::<P>),
             on_dialog: Some(on_dialog::<P>),
             on_input: Some(on_input::<P>),
+            on_game_event: Some(on_game_event::<P>),
+            on_chat: Some(on_chat::<P>),
+            on_rpc: Some(on_rpc::<P>),
         });
     }
     Status::Ok
@@ -374,4 +378,43 @@ unsafe extern "C" fn on_event<P: Plugin>(
     guard(s, "on_event", |s| {
         s.plugin.on_event(&s.host, PluginRef(from), &topic, payload);
     });
+}
+
+unsafe extern "C" fn on_game_event<P: Plugin>(ctx: *mut c_void, event: *const api::GameEvent) {
+    // SAFETY: documented pointer contracts of this callback.
+    let s = unsafe { state::<P>(ctx) };
+    // SAFETY: as above; the borrow ends with this call, which is what the ABI promises.
+    let Some(event) = (unsafe { Event::from_abi(event) }) else {
+        return;
+    };
+    guard(s, "on_game_event", |s| {
+        s.plugin.on_game_event(&s.host, &event);
+    });
+}
+
+unsafe extern "C" fn on_chat<P: Plugin>(
+    ctx: *mut c_void,
+    message: *const api::ChatMessage,
+) -> api::GameResponse {
+    // SAFETY: documented pointer contracts of this callback.
+    let s = unsafe { state::<P>(ctx) };
+    // SAFETY: as above; the borrow ends with this call, which is what the ABI promises.
+    let Some(chat) = (unsafe { Chat::from_abi(message) }) else {
+        return ChatVerdict::PASS;
+    };
+    let mut verdict = ChatVerdict::PASS;
+    guard(s, "on_chat", |s| {
+        verdict = s.plugin.on_chat(&s.host, &chat);
+    });
+    verdict
+}
+
+unsafe extern "C" fn on_rpc<P: Plugin>(ctx: *mut c_void, call: *const api::RemoteCall) {
+    // SAFETY: documented pointer contracts of this callback.
+    let s = unsafe { state::<P>(ctx) };
+    // SAFETY: as above.
+    let Some(call) = (unsafe { Rpc::from_abi(call) }) else {
+        return;
+    };
+    guard(s, "on_rpc", |s| s.plugin.on_rpc(&s.host, &call));
 }

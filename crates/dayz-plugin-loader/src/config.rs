@@ -73,6 +73,13 @@ pub struct LoaderConfig {
     pub disabled_plugins: Vec<String>,
     /// `error`, `warn`, `info`, `debug` or `trace`.
     pub log_level: String,
+    /// `false` leaves the game's own event, chat and RPC paths unpatched.
+    ///
+    /// On by default: without it no plugin can hear anything the game does, and the hooks
+    /// cost one atomic load each while nobody is subscribed. Off is for finding out whether
+    /// the loader is responsible for something odd, and for a build whose addresses are
+    /// wrong in a way the shape checks do not catch.
+    pub game_hooks: bool,
 }
 
 impl Default for LoaderConfig {
@@ -81,6 +88,7 @@ impl Default for LoaderConfig {
             enabled: true,
             disabled_plugins: Vec::new(),
             log_level: "info".to_owned(),
+            game_hooks: true,
         }
     }
 }

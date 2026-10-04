@@ -138,6 +138,29 @@ unsafe fn write_over(address: usize, bytes: &[u8]) -> Result<Vec<u8>, Status> {
     Ok(original)
 }
 
+/// Write bytes into the game's code for one of the loader's own hooks.
+///
+/// The same write the registry performs for a plugin, with the same region check, exposed so
+/// that the loader's own detours — the ones it installs on the engine during initialisation —
+/// go through one implementation rather than a second copy of it. These hooks are not
+/// registered here because nothing removes them: they live as long as the process.
+pub(super) fn write_code(address: usize, bytes: &[u8]) -> Result<Vec<u8>, Status> {
+    if bytes.is_empty() || bytes.len() > MAX_PATCH {
+        return Err(Status::InvalidArgument);
+    }
+    if !is_writable_region(address, bytes.len()) {
+        log::error!("refusing to write {address:#X}: not committed, writable memory");
+        return Err(Status::InvalidArgument);
+    }
+    if let Some(how) = already_hooked(address) {
+        log::error!("refusing to write {address:#X}: already {how} by another hook");
+        return Err(Status::AlreadyExists);
+    }
+    // SAFETY: the range is committed and inside one region, checked above, and overwriting
+    // it is what the caller asked for.
+    unsafe { write_over(address, bytes) }
+}
+
 /// Whether this address already carries a hook of a kind that cannot be stacked.
 fn already_hooked(address: usize) -> Option<&'static str> {
     registry().iter().find_map(|entry| match entry.installed {

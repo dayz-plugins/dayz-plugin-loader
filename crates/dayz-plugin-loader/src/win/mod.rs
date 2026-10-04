@@ -11,6 +11,7 @@ mod deps;
 mod detour;
 mod dispatch;
 mod exports;
+mod game_events;
 mod guard;
 mod hooks;
 mod hostapi;
@@ -128,6 +129,16 @@ fn init() -> bool {
     }
 
     data::initialize(&paths.data_dir, &paths.game_dir.join(EXECUTABLE));
+    // Before the plugins, both because one of them may subscribe during `start` and because
+    // this is the quiet moment to patch a function the engine calls constantly; see
+    // [`game_events`] for why that matters.
+    if config.game_hooks {
+        if let Some(resolved) = data::resolved() {
+            game_events::install(&resolved.table, resolved.module_base as usize);
+        }
+    } else {
+        log::info!("game_hooks is off in loader.toml; the game's own streams are not hooked");
+    }
     let host = hostapi::build(
         &paths.game_dir.to_string_lossy(),
         &paths.config_dir.to_string_lossy(),
@@ -158,6 +169,7 @@ fn init() -> bool {
     guard.hook_lines = plugin_hooks::console_lines;
     guard.read_lines = memory::console_lines;
     guard.input_lines = plugin_input::summary;
+    guard.game_lines = game_events::summary;
     guard.session = session::perform;
     register_loader_hotkeys(&mut guard);
     let running = guard.plugins.iter().filter(|p| p.enabled).count();

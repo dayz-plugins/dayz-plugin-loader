@@ -92,6 +92,16 @@ pub fn execute(state: &mut State, caller: Option<PluginHandle>, line: &str) -> O
             }
             Outcome::default()
         }
+        Line::Game => {
+            let mut lines = (state.game_lines)();
+            if lines.is_empty() {
+                lines.push("the game's own streams are not hooked".to_owned());
+            }
+            for line in lines {
+                state.console_print(line);
+            }
+            Outcome::default()
+        }
         Line::Read(target, count) => {
             for line in (state.read_lines)(&target, count) {
                 state.console_print(line);

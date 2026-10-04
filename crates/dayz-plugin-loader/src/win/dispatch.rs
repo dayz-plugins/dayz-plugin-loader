@@ -142,6 +142,63 @@ pub(crate) fn input(handle: PluginHandle, event: &api::InputEvent) -> api::Input
     }
 }
 
+/// One event the game raised. Reported, not offered: the answer is ignored.
+///
+/// Runs with the engine's own `raise` on the stack, so the guard is what keeps a faulting
+/// plugin from taking the game's event broadcast with it.
+pub(crate) fn game_event(handle: PluginHandle, event: &api::GameEvent) {
+    let Some(plugin) = plugins::find(handle) else {
+        return;
+    };
+    let Some(cb) = plugin.callbacks.on_game_event else {
+        return;
+    };
+    let ctx = plugin.callbacks.ctx;
+    // SAFETY: `event` outlives the call; `ctx` is the plugin's own context.
+    to_plugin(plugin, "on_game_event", || unsafe {
+        cb(ctx, &raw const *event);
+    });
+}
+
+/// One chat line, before the game draws it, and whether this plugin swallowed it.
+pub(crate) fn chat(handle: PluginHandle, message: &api::ChatMessage) -> api::GameResponse {
+    let Some(plugin) = plugins::find(handle) else {
+        return api::GameResponse::PASS;
+    };
+    let Some(cb) = plugin.callbacks.on_chat else {
+        return api::GameResponse::PASS;
+    };
+    if !plugin.is_enabled() {
+        return api::GameResponse::PASS;
+    }
+    let ctx = plugin.callbacks.ctx;
+    let mut answer = api::GameResponse::PASS;
+    to_plugin(plugin, "on_chat", || {
+        // SAFETY: `message` outlives the call; `ctx` is the plugin's own context.
+        answer = unsafe { cb(ctx, &raw const *message) };
+    });
+    // A value from a newer ABI reads as `Pass`, so a plugin cannot eat the game's chat by
+    // returning something this loader does not know.
+    if answer == api::GameResponse::SWALLOW {
+        api::GameResponse::SWALLOW
+    } else {
+        api::GameResponse::PASS
+    }
+}
+
+/// One remote call on its way to script. Reported, not offered.
+pub(crate) fn rpc(handle: PluginHandle, call: &api::RemoteCall) {
+    let Some(plugin) = plugins::find(handle) else {
+        return;
+    };
+    let Some(cb) = plugin.callbacks.on_rpc else {
+        return;
+    };
+    let ctx = plugin.callbacks.ctx;
+    // SAFETY: `call` outlives the call; `ctx` is the plugin's own context.
+    to_plugin(plugin, "on_rpc", || unsafe { cb(ctx, &raw const *call) });
+}
+
 /// A hotkey fired. `action` is the qualified `<plugin>.<action>` name.
 pub(crate) fn hotkey(action: &str) {
     let Some((name, bare)) = action.split_once('.') else {

@@ -160,6 +160,7 @@ impl Active {
         // And an input subscription must not outlive it either, or the window procedure keeps
         // paying for a plugin that is gone.
         super::plugin_input::forget(self.handle);
+        super::game_events::forget(self.handle);
     }
 }
 
@@ -361,6 +362,7 @@ pub(super) fn start_one(described: &Described) -> Result<Active, String> {
         }
         super::plugin_hooks::remove_all(handle, name);
         super::plugin_input::forget(handle);
+        super::game_events::forget(handle);
         return Err(failure);
     }
     if callbacks.struct_size < core::mem::size_of::<PluginCallbacks>() {

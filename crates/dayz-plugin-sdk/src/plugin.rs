@@ -4,6 +4,7 @@ use dayz_plugin_api::StopReason;
 
 use crate::deps::Dependency;
 use crate::dialogs::Shown;
+use crate::game::{Chat, ChatVerdict, Event, Rpc};
 use crate::host::{Host, PluginError, PluginRef};
 use crate::input::{Input, Verdict};
 use crate::ui::Ui;
@@ -148,4 +149,24 @@ pub trait Plugin: Sized + Send + Sync + 'static {
 
     /// A subscribed broadcast topic was published.
     fn on_event(&self, _host: &Host, _from: PluginRef, _topic: &str, _payload: &[u8]) {}
+
+    /// One event the game raised, for a plugin that called
+    /// [`Host::listen_game`](crate::Host::listen_game) with [`Streams::EVENTS`](crate::Streams::EVENTS).
+    ///
+    /// Reported rather than offered: there is nothing to return. Runs with the engine's own
+    /// broadcast on the stack, for every event the game raises, so it must return
+    /// immediately — and it is called far more often than a session's interesting moments,
+    /// because the engine raises render and input events through the same broadcaster.
+    fn on_game_event(&self, _host: &Host, _event: &Event<'_>) {}
+
+    /// One chat line, before the game draws it, for a subscriber to [`Streams::CHAT`](crate::Streams::CHAT).
+    ///
+    /// Return [`ChatVerdict::SWALLOW`] to keep the line off the screen,
+    /// [`ChatVerdict::PASS`] to let it through.
+    fn on_chat(&self, _host: &Host, _chat: &Chat<'_>) -> ChatVerdict {
+        ChatVerdict::PASS
+    }
+
+    /// One remote call on its way to script, for a subscriber to [`Streams::RPC`](crate::Streams::RPC).
+    fn on_rpc(&self, _host: &Host, _call: &Rpc) {}
 }

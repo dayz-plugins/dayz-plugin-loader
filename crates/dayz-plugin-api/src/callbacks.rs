@@ -2,6 +2,7 @@
 
 use core::ffi::c_void;
 
+use crate::game::{ChatMessage, GameEvent, GameResponse, RemoteCall};
 use crate::host::ReplyFn;
 use crate::input::{InputEvent, InputResponse};
 use crate::types::{Bytes, PluginHandle, Status, Str, UiAnswer};
@@ -109,6 +110,26 @@ pub struct PluginCallbacks {
     /// against a newer ABI cannot accidentally eat the game's input.
     pub on_input:
         Option<unsafe extern "C" fn(ctx: *mut c_void, event: *const InputEvent) -> InputResponse>,
+
+    /// An event the game raised, for a plugin that subscribed to [`GameMask::EVENTS`](crate::GameMask::EVENTS).
+    ///
+    /// Runs on whichever thread raised the event, with the engine's own call on the stack, so
+    /// it must return immediately. The answer is ignored: an event is a report, not an offer.
+    pub on_game_event: Option<unsafe extern "C" fn(ctx: *mut c_void, event: *const GameEvent)>,
+
+    /// A chat line, before the game draws it, for a subscriber to [`GameMask::CHAT`](crate::GameMask::CHAT).
+    ///
+    /// Returning [`GameResponse::SWALLOW`] keeps the line off the screen entirely. A value
+    /// the loader does not know is read as [`GameResponse::PASS`], so a plugin built against
+    /// a newer ABI cannot accidentally eat the game's chat.
+    pub on_chat:
+        Option<unsafe extern "C" fn(ctx: *mut c_void, message: *const ChatMessage) -> GameResponse>,
+
+    /// A mod's remote call on its way to script, for a subscriber to [`GameMask::RPC`](crate::GameMask::RPC).
+    ///
+    /// Reported rather than offered: the answer is ignored, because the call has already been
+    /// delivered to the rest of the engine by the time anything useful could be decided.
+    pub on_rpc: Option<unsafe extern "C" fn(ctx: *mut c_void, call: *const RemoteCall)>,
 }
 
 impl PluginCallbacks {
@@ -131,6 +152,9 @@ impl PluginCallbacks {
             on_ui: None,
             on_dialog: None,
             on_input: None,
+            on_game_event: None,
+            on_chat: None,
+            on_rpc: None,
         }
     }
 }
