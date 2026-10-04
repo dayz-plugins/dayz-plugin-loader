@@ -59,6 +59,74 @@ impl PluginOp {
     }
 }
 
+/// The port a DayZ server listens on unless it was told otherwise.
+pub const DEFAULT_SERVER_PORT: u16 = 2302;
+
+/// Where to connect to: a host and a port, with the port defaulted.
+///
+/// A type rather than a `String`, because every consumer would otherwise re-derive the same
+/// two rules — that the port is optional and that it defaults to 2302.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServerAddress {
+    /// Host name or IP address, as typed.
+    pub host: String,
+    /// Port, defaulted when the address did not carry one.
+    pub port: u16,
+}
+
+impl ServerAddress {
+    /// Parse `host`, `host:port`, `[v6]` or `[v6]:port`.
+    ///
+    /// # Errors
+    /// An empty host, or a port that is not a number in range.
+    pub fn parse(text: &str) -> Result<Self, ParseError> {
+        let text = text.trim();
+        // A bracketed IPv6 literal carries colons of its own, so the port is whatever follows
+        // the closing bracket rather than whatever follows the last colon.
+        let (host, port) = match text.strip_prefix('[') {
+            Some(rest) => {
+                let (host, tail) = rest.split_once(']').ok_or(ParseError::ConnectUsage)?;
+                (host, tail.strip_prefix(':'))
+            }
+            None => match text.split_once(':') {
+                Some((host, port)) => (host, Some(port)),
+                None => (text, None),
+            },
+        };
+        if host.is_empty() {
+            return Err(ParseError::ConnectUsage);
+        }
+        let port = match port {
+            None => DEFAULT_SERVER_PORT,
+            Some(port) => port.parse().map_err(|_| ParseError::ConnectUsage)?,
+        };
+        Ok(ServerAddress {
+            host: host.to_owned(),
+            port,
+        })
+    }
+}
+
+impl std::fmt::Display for ServerAddress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.host.contains(':') {
+            return write!(f, "[{}]:{}", self.host, self.port);
+        }
+        write!(f, "{}:{}", self.host, self.port)
+    }
+}
+
+/// What the loader is being asked to do with the game session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionOp {
+    /// `connect <host[:port]>`: join a server.
+    Connect(ServerAddress),
+    /// `disconnect`: leave the server and go back to the main menu.
+    Disconnect,
+    /// `quit`: close the game.
+    Quit,
+}
+
 /// A parsed console line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Line {
@@ -87,6 +155,8 @@ pub enum Line {
     Variable(String, Option<String>),
     /// `<plugin.command> [args...]`: forwarded to the owning plugin with raw args.
     Command(String, String),
+    /// `connect`, `disconnect`, `quit`: what the game session does next.
+    Session(SessionOp),
 }
 
 /// Why a line could not be parsed.
@@ -107,6 +177,9 @@ pub enum ParseError {
     /// A `plugin` operation that acts on one plugin, without its name.
     #[error("usage: plugin {0} <name>")]
     PluginNeedsName(&'static str),
+    /// `connect` without an address, or with one that does not parse.
+    #[error("usage: connect <host|ip>[:port]   (port defaults to 2302)")]
+    ConnectUsage,
 }
 
 /// Split the first whitespace separated word from the rest.
@@ -144,6 +217,14 @@ pub fn parse(line: &str) -> Result<Line, ParseError> {
                 return Err(ParseError::PluginNeedsName(op.as_str()));
             }
             Line::Plugin(op, name)
+        }
+        "quit" | "exit" => Line::Session(SessionOp::Quit),
+        "disconnect" => Line::Session(SessionOp::Disconnect),
+        "connect" => {
+            if rest.is_empty() {
+                return Err(ParseError::ConnectUsage);
+            }
+            Line::Session(SessionOp::Connect(ServerAddress::parse(rest)?))
         }
         "symbols" | "syms" => Line::Symbols(optional(rest)),
         "hooks" => Line::Hooks,
@@ -199,6 +280,9 @@ pub const BUILTIN_NAMES: &[&str] = &[
     "read",
     "get",
     "set",
+    "connect",
+    "disconnect",
+    "quit",
 ];
 
 /// Help text for the built-in commands, one entry per line.
@@ -241,6 +325,12 @@ pub const BUILTIN_HELP: &[(&str, &str)] = &[
         "read [*]<symbol|0xaddr>[+off] [bytes]",
         "Dump game memory; * reads the pointer there first.",
     ),
+    (
+        "connect <host|ip>[:port]",
+        "Join a server; the port defaults to 2302.",
+    ),
+    ("disconnect", "Leave the server and go back to the menu."),
+    ("quit", "Close the game, the way its own menu would."),
     ("get <plugin.key>", "Print a setting."),
     ("set <plugin.key> <value>", "Change a setting."),
     ("<plugin.key> [value]", "Shorthand for get / set."),
@@ -340,6 +430,39 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn session_commands() {
+        assert_eq!(parse("quit"), Ok(Line::Session(SessionOp::Quit)));
+        assert_eq!(parse("EXIT"), Ok(Line::Session(SessionOp::Quit)));
+        assert_eq!(
+            parse("disconnect"),
+            Ok(Line::Session(SessionOp::Disconnect))
+        );
+        let connect = |text: &str| match parse(text) {
+            Ok(Line::Session(SessionOp::Connect(address))) => Ok(address.to_string()),
+            other => Err(format!("{other:?}")),
+        };
+        assert_eq!(
+            connect("connect 127.0.0.1:2302"),
+            Ok("127.0.0.1:2302".into())
+        );
+        assert_eq!(
+            connect("connect 127.0.0.1"),
+            Ok("127.0.0.1:2302".into()),
+            "the port defaults"
+        );
+        assert_eq!(
+            connect("connect dayz.example.com:27016"),
+            Ok("dayz.example.com:27016".into())
+        );
+        assert_eq!(connect("connect [::1]:2402"), Ok("[::1]:2402".into()));
+        assert_eq!(connect("connect [::1]"), Ok("[::1]:2302".into()));
+        assert_eq!(parse("connect"), Err(ParseError::ConnectUsage));
+        assert_eq!(parse("connect host:nope"), Err(ParseError::ConnectUsage));
+        assert_eq!(parse("connect :2302"), Err(ParseError::ConnectUsage));
+        assert_eq!(parse("connect host:99999"), Err(ParseError::ConnectUsage));
     }
 
     #[test]

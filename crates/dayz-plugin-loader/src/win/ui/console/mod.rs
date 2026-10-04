@@ -23,6 +23,17 @@ use super::chrome::{self, Chrome, Placed};
 /// How many submitted lines the arrow keys can walk back through.
 const HISTORY: usize = 100;
 
+/// What the input box's keys asked for this frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pressed {
+    /// Nothing that the caller has to act on.
+    Nothing,
+    /// Enter: run the line.
+    Submit,
+    /// Escape on an empty line: close the console.
+    Close,
+}
+
 /// What the scrollback holds this frame, for the status line and the clear button.
 #[derive(Debug, Clone, Copy)]
 struct Stats {
@@ -188,8 +199,18 @@ impl ConsolePanel {
         }
         ui.horizontal(|ui| {
             ui.label(RichText::new(">").monospace());
+            // The keys are taken out of the queue *before* the box is drawn, while the focus
+            // it had last frame still says whether they were meant for it. Letting the box
+            // see them first is what made every other command disappear: egui's single-line
+            // text edit answers Enter by surrendering focus, so by the time the response
+            // could be asked whether Enter had arrived, the box no longer had the keyboard
+            // and the line was dropped on the floor.
+            let id = ui.id().with("line");
+            let focused = ui.memory(|memory| memory.has_focus(id));
+            let pressed = focused.then(|| self.take_keys(ui, names, stats.newest));
             let response = ui.add(
                 TextEdit::singleline(&mut self.input)
+                    .id(id)
                     .font(egui::TextStyle::Monospace)
                     .hint_text("type `help`")
                     .desired_width(ui.available_width()),
@@ -198,8 +219,15 @@ impl ConsolePanel {
                 response.request_focus();
                 self.focus = false;
             }
-            if response.has_focus() {
-                self.keys(ui, names, outcome, stats.newest);
+            match pressed {
+                Some(Pressed::Submit) => {
+                    outcome.submitted = self.submit();
+                    self.offered.clear();
+                    // The box keeps the keyboard, so the next command can just be typed.
+                    response.request_focus();
+                }
+                Some(Pressed::Close) => outcome.close = true,
+                Some(Pressed::Nothing) | None => {}
             }
         });
         let hidden_note = if stats.hidden == 0 {
@@ -217,36 +245,33 @@ impl ConsolePanel {
         );
     }
 
-    /// The keys the input box answers to while it has focus.
-    fn keys(&mut self, ui: &mut egui::Ui, names: &[String], outcome: &mut Outcome, newest: u64) {
-        // Tab is consumed before egui sees it: it would otherwise move the focus to the next
-        // widget, which in a console means the completion key closes the keyboard instead.
+    /// Take the keys the input box answers to out of this frame's queue.
+    ///
+    /// Every one of them is *consumed*, so the text edit drawn afterwards never sees it and
+    /// cannot act on it as well — which is the whole point of doing this first.
+    fn take_keys(&mut self, ui: &mut egui::Ui, names: &[String], newest: u64) -> Pressed {
+        // Tab would otherwise move the focus to the next widget, which in a console means
+        // the completion key closes the keyboard.
         if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Tab)) {
             self.complete(names);
-        }
-        // Checked against the box having focus rather than losing it: egui only reports
-        // `lost_focus` when it processes the Enter itself, which it does not on the frame
-        // focus was just requested back, and a console that silently eats every other
-        // command is worse than useless.
-        if ui.input(|i| i.key_pressed(Key::Enter)) {
-            outcome.submitted = self.submit();
-            self.focus = true;
-            self.offered.clear();
         }
         if ui.input_mut(|i| i.consume_key(Modifiers::CTRL, Key::L)) {
             self.filter.cleared_at = newest;
         }
-        if ui.input(|i| i.key_pressed(Key::Escape)) {
+        self.recall_history(ui);
+        if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter)) {
+            return Pressed::Submit;
+        }
+        if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
             // The first Escape drops a half-typed line, the second closes the window: having
             // the only way out also lose what was typed is a trap.
             if self.input.is_empty() {
-                outcome.close = true;
-            } else {
-                self.input.clear();
-                self.offered.clear();
+                return Pressed::Close;
             }
+            self.input.clear();
+            self.offered.clear();
         }
-        self.recall_history(ui.ctx());
+        Pressed::Nothing
     }
 
     /// Complete the typed line, or offer what it could be.
@@ -278,9 +303,13 @@ impl ConsolePanel {
     }
 
     /// Walk the submitted-line history with the arrow keys.
-    fn recall_history(&mut self, ctx: &Context) {
-        let (up, down) =
-            ctx.input(|i| (i.key_pressed(Key::ArrowUp), i.key_pressed(Key::ArrowDown)));
+    fn recall_history(&mut self, ui: &egui::Ui) {
+        let (up, down) = ui.input_mut(|i| {
+            (
+                i.consume_key(Modifiers::NONE, Key::ArrowUp),
+                i.consume_key(Modifiers::NONE, Key::ArrowDown),
+            )
+        });
         if self.history.is_empty() || !(up || down) {
             return;
         }

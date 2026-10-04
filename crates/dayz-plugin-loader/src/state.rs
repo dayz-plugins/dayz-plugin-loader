@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use dayz_plugin_api::{PluginHandle, Status};
-use dayz_plugin_core::{hotkeys, keys, names, settings, store, windows};
+use dayz_plugin_core::{console, hotkeys, keys, names, settings, store, windows};
 
 use crate::config::{LoaderConfig, Paths};
 use crate::scrollback;
@@ -150,6 +150,11 @@ pub struct State {
     pub read_lines: fn(&str, Option<usize>) -> Vec<String>,
     /// Produces the lines the `input` command prints: who watches the input stream.
     pub input_lines: fn() -> Vec<String>,
+    /// Performs `connect`, `disconnect` and `quit`, and returns what to print.
+    ///
+    /// A function pointer for the same reason as the four above: driving the game's session
+    /// means calling into the game, which is the platform layer's business.
+    pub session: fn(&console::SessionOp) -> Vec<String>,
     /// Where the overlay's windows were left, and whether advanced settings are shown.
     pub windows: windows::Layout,
 }
@@ -172,6 +177,11 @@ fn no_input() -> Vec<String> {
 /// Default for [`State::hook_lines`]: no platform layer, so no hooks.
 fn no_hooks() -> Vec<String> {
     Vec::new()
+}
+
+/// Default for [`State::session`]: no platform layer, so no game to drive.
+fn no_session(_op: &console::SessionOp) -> Vec<String> {
+    vec!["driving the game session needs the platform layer".to_owned()]
 }
 
 impl State {
@@ -203,6 +213,7 @@ impl State {
             hook_lines: no_hooks,
             read_lines: no_memory,
             input_lines: no_input,
+            session: no_session,
         }
     }
 

@@ -22,6 +22,7 @@ mod memory;
 mod plugin_hooks;
 mod plugin_input;
 mod plugins;
+mod session;
 mod ui;
 mod vtable;
 
@@ -157,40 +158,8 @@ fn init() -> bool {
     guard.hook_lines = plugin_hooks::console_lines;
     guard.read_lines = memory::console_lines;
     guard.input_lines = plugin_input::summary;
-    // The loader's own overlay actions. The console's first binding is by scan code, not by
-    // key name: 0x29 is the key under Escape on every layout, and its virtual key code is a
-    // different one on each — the reason binding it by name worked on one keyboard and not on
-    // the next. The second one is for the layouts where that key is a dead diacritic, and for
-    // anyone who would rather not reach for it.
-    guard.register_loader_hotkey("console", "Show the in-game console", "sc29, ctrl+shift+c");
-    guard.register_loader_hotkey("settings", "Show the settings editor", "f11");
-    guard.register_loader_hotkey(
-        "mouse",
-        "Give the mouse back to the game, or take it",
-        "ctrl+shift+m",
-    );
-    for entry in guard.hotkeys.iter() {
-        let binding = entry.binding();
-        // A scan code binding also reports what this keyboard layout makes of it, because
-        // "the key under Escape does nothing" is otherwise impossible to diagnose from a log.
-        let resolved: Vec<String> = entry
-            .chords()
-            .filter_map(|c| c.scancode)
-            .filter_map(|sc| {
-                dayz_plugin_core::hotkeys::KeyState::vk_for_scancode(&input::AsyncKeys, sc)
-                    .map(|vk| format!("sc{sc:x} is vk 0x{vk:02x} on this layout"))
-            })
-            .collect();
-        if resolved.is_empty() {
-            log::info!("hotkey {} = {binding}", entry.name);
-        } else {
-            log::info!(
-                "hotkey {} = {binding} ({})",
-                entry.name,
-                resolved.join(", ")
-            );
-        }
-    }
+    guard.session = session::perform;
+    register_loader_hotkeys(&mut guard);
     let running = guard.plugins.iter().filter(|p| p.enabled).count();
     log::info!("{running} of {} plugins running", guard.plugins.len());
     drop(guard);
@@ -204,6 +173,45 @@ fn init() -> bool {
         &plugin_summary(running, &state().plugins),
     );
     running > 0
+}
+
+/// Register the loader's own overlay actions, then log what every action ended up bound to.
+///
+/// The console's first binding is by scan code, not by key name: `0x29` is the key under
+/// Escape on every layout, and its virtual key code is a different one on each — the reason
+/// binding it by name worked on one keyboard and not on the next. The second one is for the
+/// layouts where that key is a dead diacritic, and for anyone who would rather not reach for
+/// it.
+fn register_loader_hotkeys(guard: &mut State) {
+    guard.register_loader_hotkey("console", "Show the in-game console", "sc29, ctrl+shift+c");
+    guard.register_loader_hotkey("settings", "Show the settings editor", "f11");
+    guard.register_loader_hotkey(
+        "mouse",
+        "Give the mouse back to the game, or take it",
+        "ctrl+shift+m",
+    );
+    for entry in guard.hotkeys.iter() {
+        // A scan code binding also reports what this keyboard layout makes of it, because
+        // "the key under Escape does nothing" is otherwise impossible to diagnose from a log.
+        let resolved: Vec<String> = entry
+            .chords()
+            .filter_map(|c| c.scancode)
+            .filter_map(|sc| {
+                dayz_plugin_core::hotkeys::KeyState::vk_for_scancode(&input::AsyncKeys, sc)
+                    .map(|vk| format!("sc{sc:x} is vk 0x{vk:02x} on this layout"))
+            })
+            .collect();
+        let binding = entry.binding();
+        if resolved.is_empty() {
+            log::info!("hotkey {} = {binding}", entry.name);
+        } else {
+            log::info!(
+                "hotkey {} = {binding} ({})",
+                entry.name,
+                resolved.join(", ")
+            );
+        }
+    }
 }
 
 /// The toast's second line: which plugins came up, or why none did.
