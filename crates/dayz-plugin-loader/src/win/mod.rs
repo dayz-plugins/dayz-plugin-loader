@@ -265,6 +265,9 @@ pub(crate) fn set_game_window(hwnd: *mut c_void) {
 /// window messages, which `GetAsyncKeyState` does because it reads physical key state. The
 /// overlay's own input comes from the window subclass in `ui::wnd` instead.
 pub(crate) fn tick(_swapchain: *mut c_void) {
+    // First, because this is the game's own thread and that is the whole point of these:
+    // see [`session`] for what calling them from anywhere else did to a live session.
+    session::run_pending();
     let focused = input::is_focused(GAME_WINDOW.load(Ordering::Relaxed));
     // Presses are drained whether or not the game has focus, so a key pressed elsewhere does
     // not sit in the queue waiting to fire on the way back in.

@@ -146,7 +146,9 @@ pub(super) unsafe extern "C" fn chat_local(
     colour: Str,
 ) -> Status {
     let (text, colour) = (hostapi::text(text), hostapi::text(colour));
-    match session::chat_local(&text, &colour) {
+    // Queued for the next frame rather than called here; a plugin may be on any thread and
+    // the engine's own members are not safe off its. See [`super::session`].
+    match session::request_chat(&text, &colour) {
         Ok(()) => Status::Ok,
         Err(why) => {
             log::debug!("a plugin could not put a line in chat: {why}");

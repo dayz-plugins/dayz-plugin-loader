@@ -115,9 +115,15 @@ static NAMES: Mutex<Option<HashMap<usize, Option<Box<str>>>>> = Mutex::new(None)
 /// first argument *is* the instance, passed by the engine itself. That is the strongest
 /// provenance a pointer can have, and it is what the session natives have been waiting for.
 ///
-/// The cost is that it only arrives once the game has dispatched a remote call, which means
-/// after joining a server at least once this session. `disconnect` is wanted in a session
-/// anyway; `connect` from a cold main menu still has nothing, and says so.
+/// Two hooks pass it: `chat.raise_message` and `rpc.dispatch_to_script` are both `CGame`
+/// members, so both receive the instance as their first argument. Whichever fires first wins.
+///
+/// The cost is that neither fires in the main menu, so the instance arrives only once a
+/// session has started. That is not for want of looking: every `CGame` member in the symbol
+/// table is referenced from exactly two places in the image — the script registration table
+/// at `0x5B9D80` and its own relocation — so the engine never calls one internally with the
+/// instance loaded from a global, and there is no global here to read. `disconnect` is wanted
+/// in a session anyway; `connect` from a cold main menu still has nothing, and says so.
 static GAME: AtomicUsize = AtomicUsize::new(0);
 /// The offsets the hooks read, resolved once.
 static LAYOUT: OnceLock<Layout> = OnceLock::new();
@@ -397,6 +403,10 @@ unsafe extern "C" fn chat_hook(
     text: *mut *mut c_void,
     colour: *mut *mut c_void,
 ) -> *mut c_void {
+    // `chat.raise_message` is a `CGame` member too, and it fires long before any mod sends a
+    // remote call, so this is the earlier of the two places the instance turns up. Both are
+    // the engine passing its own `this`; see [`remember_game`].
+    remember_game(game);
     if let (true, Some(layout)) = (wants(GameMask::CHAT), LAYOUT.get()) {
         if offer_chat(channel, from, text, colour, layout) == GameResponse::SWALLOW {
             // The engine's return value is a leftover register rather than a result, so
