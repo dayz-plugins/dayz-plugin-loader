@@ -1,5 +1,11 @@
 # dayz-plugin-loader
 
+> **Superseded.** The DayZ plugins now run on [uniloader](https://uniloaders.github.io/), a
+> plugin loader for any game, with the DayZ knowledge from this repository moved into the
+> [dayz-adapter](https://github.com/dayz-plugins/dayz-adapter) plugin. This repository stays for
+> the `dayz-data` reader crate and the `dayz-data` tool, which the adapter still uses; the
+> loader itself is no longer developed.
+
 A plugin loader for DayZ, written in Rust. It ships as `dxgi.dll` next to `DayZ_x64.exe`,
 forwards every DXGI call to the real system library, and hosts native plugins that the game
 knows nothing about. Plugins are ordinary DLLs in `plugins/`; they are not PBO
